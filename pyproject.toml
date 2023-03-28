@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "auto-politseikroonika"
+version = "0.1.0"
+description = ""
+authors = ["Siim Lepik <siim.lepik@gmail.com>"]
+readme = "README.md"
+packages = [{include = "auto_politseikroonika"}]
+
+[tool.poetry.dependencies]
+python = ">=3.7, <3.10"
+yt-dlp = "^2023.3.4"
+tts_preprocess_et = {path = "tts_preprocess_et", develop = true}
+estnltk = "1.6.9.1b"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
