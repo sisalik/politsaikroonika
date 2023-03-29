@@ -68,11 +68,22 @@ def extract_words(transcript):
             if element["type"] != "text":
                 continue
 
+            # Some words in the transcript have no start or end time at all. Insert a
+            # None and fix it later.
+            try:
+                start = float(element["marks"][0]["attrs"]["start"])
+            except (KeyError, ValueError):
+                start = None
+            try:
+                end = float(element["marks"][0]["attrs"]["end"])
+            except (KeyError, ValueError):
+                end = None
+
             block_words.append(
                 Word(
                     text=element["text"],
-                    start=float(element["marks"][0]["attrs"]["start"]),
-                    end=float(element["marks"][0]["attrs"]["end"]),
+                    start=start,
+                    end=end,
                 )
             )
         # In case the last string doesn't end with terminal punctiation , but the block
@@ -83,13 +94,63 @@ def extract_words(transcript):
         yield from block_words
 
 
-def fix_words(words):
+def fix_word_timestamps(words):
+    """Fill in timestamps for words that are missing them."""
+    words = list(words)  # We need to jump back and forth in the list
+    # List of (start_index, end_index) tuples of words that are missing timestamps
+    duration_missing_ranges = []
+    for i, word in enumerate(words):
+        if word.start is None or word.end is None:
+            if not duration_missing_ranges:
+                duration_missing_ranges.append((i, i))
+            # The current word is adjacent to the previous missing range
+            elif i == duration_missing_ranges[-1][1] + 1:
+                # Extend the last range
+                duration_missing_ranges[-1] = (duration_missing_ranges[-1][0], i)
+    # Fill in the missing timestamps
+    for start_idx, end_idx in duration_missing_ranges:
+        if start_idx == 0:
+            # Extrapolate the timestamps from the next known word
+            next_good_word = words[end_idx + 1]
+            next_known_duration = next_good_word.end - next_good_word.start
+            missing_char_duration = next_known_duration / len(next_good_word.text)
+            for i in range(end_idx, start_idx - 1, -1):
+                words[i].end = words[i + 1].start
+                words[i].start = words[i].end - missing_char_duration * len(
+                    words[i].text
+                )
+        elif end_idx == len(words) - 1:
+            # Extrapolate the timestamps from the previous known word
+            prev_good_word = words[start_idx - 1]
+            prev_known_duration = prev_good_word.end - prev_good_word.start
+            missing_char_duration = prev_known_duration / len(prev_good_word.text)
+            for i in range(start_idx, end_idx + 1):
+                words[i].start = words[i - 1].end
+                words[i].end = words[i].start + missing_char_duration * len(
+                    words[i].text
+                )
+        else:
+            # Fill in the interval between the previous and next known words
+            prev_good_word = words[start_idx - 1]
+            next_good_word = words[end_idx + 1]
+            missing_char_duration = (next_good_word.start - prev_good_word.end) / (
+                sum(len(word.text) for word in words[start_idx : end_idx + 1])
+            )
+            for i in range(start_idx, end_idx + 1):
+                words[i].start = words[i - 1].end
+                words[i].end = words[i].start + missing_char_duration * len(
+                    words[i].text
+                )
+    yield from words
+
+
+def fix_split_or_merged_words(words):
     """Fix split or merged words.
 
     Sometimes the transcript JSON file contains words that are split across two elements
     or merged together into one, e.g. "jalakäijate", "st" or "kõige olulisem"
     """
-    words = list(words)  # We need to iterate several times
+    words = list(words)  # We need to manipulate the list
     for i, word in enumerate(words):
         # If the word doesn't end with a space or punctuation, it is probably split
         if re.search(rf"[{EST_ALPHABET_REGEX}0-9:-]$", word.text):
@@ -284,8 +345,10 @@ def main(args):
             transcript = json.load(f)
         # Get the timestamped words from the transcript
         words = extract_words(transcript)
+        # Fill in durations for words that don't have them
+        words = fix_word_timestamps(words)
         # Merge words that were split by the ASR; split words that were merged
-        words = fix_words(words)
+        words = fix_split_or_merged_words(words)
         # Group words into sentences
         sentences = make_sentences(words)
         # Ensure that sentences are not too long and split them if necessary
@@ -307,7 +370,6 @@ def main(args):
                 f.write(sentence_id + ".wav|" + sentence.text + "\n")
 
             sentence_idx += 1
-        # return
     pass
 
 

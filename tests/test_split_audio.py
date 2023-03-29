@@ -4,7 +4,8 @@ import pytest
 
 from auto_politseikroonika.language_consts import EST_ALPHABET_REGEX
 from auto_politseikroonika.split_audio import (
-    fix_words,
+    fix_word_timestamps,
+    fix_split_or_merged_words,
     make_sentences,
     words_are_equal_except_for_punctuation,
     Word,
@@ -34,6 +35,48 @@ def _make_words_list(text, start=0, end=None):
     return word_objs
 
 
+def test_fix_word_timestamps_middle():
+    """A word in the middle of the sentence is missing timestamps."""
+    words = [
+        _make_word("Sõna 1", 0, 1),
+        _make_word("sõna 2", None, None),
+        _make_word("sõna 3", 2, 3),
+    ]
+    fixed_words = list(fix_word_timestamps(words))
+    assert (fixed_words[0].start, fixed_words[0].end) == (0, 1)
+    assert (fixed_words[1].start, fixed_words[1].end) == (1, 2)
+    assert (fixed_words[2].start, fixed_words[2].end) == (2, 3)
+
+
+def test_fix_word_timestamps_initial():
+    """Initial words in the sentence are missing timestamps."""
+    words = [
+        _make_word("Sõna 1", None, None),
+        _make_word("sõna 2", None, None),
+        _make_word("sõna       3", 2, 3),  # Double the length of the other words
+    ]
+    fixed_words = list(fix_word_timestamps(words))
+    # The first two words should be half the duration of the third word since they have
+    # half the number of characters
+    assert (fixed_words[0].start, fixed_words[0].end) == (1.0, 1.5)
+    assert (fixed_words[1].start, fixed_words[1].end) == (1.5, 2)
+    assert (fixed_words[2].start, fixed_words[2].end) == (2, 3)
+
+
+def test_fix_word_timestamps_final():
+    """Final words in the sentence are missing timestamps."""
+    words = [
+        _make_word("Sõna 1", 0, 1),
+        _make_word("sõna 2", 1, 2),
+        _make_word("sõna 3", None, None),
+        _make_word("sõna 4", None, None),
+    ]
+    fixed_words = list(fix_word_timestamps(words))
+    assert (fixed_words[0].start, fixed_words[0].end) == (0, 1)
+    assert (fixed_words[1].start, fixed_words[1].end) == (1, 2)
+    assert (fixed_words[2].start, fixed_words[2].end) == (2, 3)
+    assert (fixed_words[3].start, fixed_words[3].end) == (3, 4)
+
 @pytest.mark.parametrize(
     "words, expected_words",
     [
@@ -43,7 +86,7 @@ def _make_words_list(text, start=0, end=None):
 )
 def test_fix_words(words, expected_words):
     word_objs = [_make_word(word, i, i + 1) for i, word in enumerate(words)]
-    fixed_words = list(fix_words(word_objs))
+    fixed_words = list(fix_split_or_merged_words(word_objs))
     for i, (word, expected_word) in enumerate(zip(fixed_words, expected_words)):
         assert word.text == expected_word
         assert word.start == i
