@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from estnltk import Text
 from loguru import logger
+from tts_preprocess_et.convert import convert_sentence
 
 from auto_politseikroonika.morph_categories import WordClass
 
@@ -32,10 +33,17 @@ class Word:
 class Sentence:
     def __init__(self, words):
         self.words = words
+        self._text = None
+
+    def convert_text(self):
+        """Convert the sentence text to format that can be used as input for the TTS."""
+        self._text = convert_sentence(self.text)
 
     @property
     def text(self):
-        return " ".join([word.text for word in self.words])
+        if self._text is None:
+            return " ".join([word.text for word in self.words])
+        return self._text
 
     @property
     def start(self):
@@ -180,8 +188,9 @@ def split_sentence_lengths_are_ok(sentence, split_idx):
 
 def convert_sentences(sentences):
     """Convert the sentences by expanding abbreviations, numbers, etc."""
-    # TODO: Reimplement this
-    yield from sentences
+    for sentence in sentences:
+        sentence.convert_text()
+        yield sentence
 
 
 def extract_clip(input_wav, output_wav, start, end):
