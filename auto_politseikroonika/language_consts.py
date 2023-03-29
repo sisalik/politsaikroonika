@@ -1,5 +1,9 @@
 from enum import Enum
 
+
+EST_ALPHABET_REGEX = "A-ZÄÖÜÕŽŠa-zäöüõšž"
+
+
 class WordClass(str, Enum):
     """Word class morphological categories of Estonian words.
 

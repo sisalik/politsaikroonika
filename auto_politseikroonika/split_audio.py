@@ -1,15 +1,16 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
 
 from estnltk import Text
 from loguru import logger
-from tts_preprocess_et.convert import convert_sentence
 
-from auto_politseikroonika.morph_categories import WordClass
+from auto_politseikroonika.language_consts import EST_ALPHABET_REGEX, WordClass
+from tts_preprocess_et.convert import convert_sentence
 
 # The speaker IDs that are used in the transcript JSON file to tag the speech we are
 # interested in
@@ -69,21 +70,67 @@ def extract_words(transcript):
 
             block_words.append(
                 Word(
-                    text=element["text"].strip(),
+                    text=element["text"],
                     start=float(element["marks"][0]["attrs"]["start"]),
                     end=float(element["marks"][0]["attrs"]["end"]),
                 )
             )
-        # In case the last string doesn't end with a period, but the block ends,
-        # add the missing period
-        if block_words[-1].text[-1] != ".":
-            block_words[-1].text += "."
+        # In case the last string doesn't end with terminal punctiation , but the block
+        # has finished, add a period to the end of the last word
+        final_char = block_words[-1].text.strip()[-1]
+        if final_char not in ".!?":
+            block_words[-1].text = block_words[-1].text.strip() + "."
         yield from block_words
+
+
+def fix_words(words):
+    """Fix split or merged words.
+
+    Sometimes the transcript JSON file contains words that are split across two elements
+    or merged together into one, e.g. "jalakäijate", "st" or "kõige olulisem"
+    """
+    words = list(words)  # We need to iterate several times
+    for i, word in enumerate(words):
+        # If the word doesn't end with a space or punctuation, it is probably split
+        if re.search(rf"[{EST_ALPHABET_REGEX}0-9:-]$", word.text):
+            words[i + 1] = Word(
+                word.text + words[i + 1].text,
+                word.start,
+                words[i + 1].end,
+            )
+            words[i] = None  # Mark for removal
+            continue
+        # Detect merged words by trying to split them where a space is followed by a
+        # letter
+        split_words = re.split(rf"(?<= )(?=[{EST_ALPHABET_REGEX}0-9])", word.text)
+        if len(split_words) > 1:
+            # We don't know exactly how long the constituent words are, so we just
+            # split the duration evenly
+            new_word_duration = (word.end - word.start) / len(split_words)
+            words[i] = Word(
+                split_words[0],
+                word.start,
+                word.start + new_word_duration,
+            )
+            for j, new_word in enumerate(split_words[1:]):
+                words.insert(
+                    i + j + 1,
+                    Word(
+                        new_word,
+                        word.start + (j + 1) * new_word_duration,
+                        word.start + (j + 2) * new_word_duration,
+                    ),
+                )
+    # Remove the marked words and return the rest, stripped of whitespace
+    for word in words:
+        if word is not None:
+            word.text = word.text.strip()
+            yield word
 
 
 def make_sentences(words):
     """Draw sentence boundaries, addressing ordinal numbers and abbreviations etc."""
-    all_words = list(words)  # We need to iterate over the words twice
+    all_words = list(words)  # We need to iterate several times
     paragraph = Text(" ".join(word.text for word in all_words))
     paragraph.analyse("morphology")
     word_obj_iterator = iter(all_words)
@@ -97,7 +144,7 @@ def make_sentences(words):
             word_obj = next(word_obj_iterator)
             assert words_are_equal_except_for_punctuation(
                 word_obj.text, word.text
-            ), f"Word mismatch: {word_obj.text} != {word.text}"  # Sanity check - should never happen
+            ), f"Word mismatch: {word_obj.text} != {word.text}"
             sentence_words.append(word_obj)
         yield Sentence(sentence_words)
 
@@ -165,7 +212,9 @@ def find_split_idx_conjunction(sentence):
         for conj_idx in conj_indices:
             if abs(conj_idx - mid_idx) < abs(split_idx - mid_idx):
                 split_idx = conj_idx
-        return split_idx - 1  # We want to split just before the conjunction
+        # Splitting won't work if the conjunction is the first or last word
+        if split_idx > 0 and split_idx < len(sentence.words) - 1:
+            return split_idx - 1  # We want to split just before the conjunction
     return None
 
 
@@ -235,6 +284,8 @@ def main(args):
             transcript = json.load(f)
         # Get the timestamped words from the transcript
         words = extract_words(transcript)
+        # Merge words that were split by the ASR; split words that were merged
+        words = fix_words(words)
         # Group words into sentences
         sentences = make_sentences(words)
         # Ensure that sentences are not too long and split them if necessary
@@ -256,7 +307,7 @@ def main(args):
                 f.write(sentence_id + ".wav|" + sentence.text + "\n")
 
             sentence_idx += 1
-        return
+        # return
     pass
 
 
