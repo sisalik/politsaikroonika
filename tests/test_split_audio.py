@@ -20,7 +20,7 @@ def _make_words_list(text, start=0, end=None):
     # Split text into words using a regex to define the separators. This is to match the
     # behaviour of the tekstiks.ee ASR pipeline which groups punctuation with the
     # preceding word.
-    words = re.split(fr" (?=[{EST_ALPHABET_REGEX}0-9])", text)
+    words = re.split(rf" (?=[{EST_ALPHABET_REGEX}0-9])", text)
     if end is None:
         end = start + len(words)
     duration = end - start
@@ -77,20 +77,33 @@ def test_fix_word_timestamps_final():
     assert (fixed_words[2].start, fixed_words[2].end) == (2, 3)
     assert (fixed_words[3].start, fixed_words[3].end) == (3, 4)
 
+
 @pytest.mark.parametrize(
-    "words, expected_words",
+    "words, expected_words, expected_durations",
     [
-        (["Vasikaid ", "oli ", "5."], ["Vasikaid", "oli", "5."]),
-        (["Vasi", "kaid ol", "i 5. "], ["Vasikaid", "oli", "5."]),
+        (["Vasikaid ", "oli ", "5."], ["Vasikaid", "oli", "5."], None),
+        (["Vasi", "kaid ol", "i 5. "], ["Vasikaid", "oli", "5."], None),
+        (
+            ["Kui ", "jood,", " ", "siis ä", "ra sõida."],
+            ["Kui", "jood,", "siis", "ära", "sõida."],
+            # Word lengths get split up unevenly. "jood," and " " are 1 second each,
+            # so "jood, " ends up being 2 seconds. The remaining 2 seconds are split
+            # between 3 words, each of which is 0.66 seconds long.
+            [1, 2, 2 / 3, 2 / 3, 2 / 3],
+        ),
     ],
 )
-def test_fix_words(words, expected_words):
+def test_fix_words(words, expected_words, expected_durations):
     word_objs = [_make_word(word, i, i + 1) for i, word in enumerate(words)]
     fixed_words = list(fix_split_or_merged_words(word_objs))
     for i, (word, expected_word) in enumerate(zip(fixed_words, expected_words)):
         assert word.text == expected_word
-        assert word.start == i
-        assert word.end == i + 1
+        if expected_durations is None:
+            assert word.start == i
+            assert word.end == i + 1
+        else:
+            assert word.start == sum(expected_durations[:i])
+            assert word.end == word.start + expected_durations[i]
 
 
 @pytest.mark.parametrize(
@@ -130,11 +143,3 @@ def test_make_sentences(words, expected_sentences):
     sentences = list(make_sentences(words))
     for sentence, expected_sentence in zip(sentences, expected_sentences):
         assert sentence.text == expected_sentence
-
-
-# def test_make_sentences_with_multiple_words_in_a_word():
-#     """Sometimes the transcript includes several words where there should be one."""
-#     words = _make_words_list("Vasikaid oli 20.")
-#     words[1].text = "oli 5. laudas"
-#     sentences = list(make_sentences(words))
-#     assert sentences[0].text == "Vasikaid oli 5. laudas 20."

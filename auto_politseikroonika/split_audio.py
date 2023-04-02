@@ -151,12 +151,12 @@ def fix_split_or_merged_words(words):
     """Fix split or merged words.
 
     Sometimes the transcript JSON file contains words that are split across two elements
-    or merged together into one, e.g. "jalakäijate", "st" or "kõige olulisem"
+    or merged together into one, e.g. "jalakäi" + "jatest" or "kõige olulisem".
     """
     words = list(words)  # We need to manipulate the list
     for i, word in enumerate(words):
-        # If the word doesn't end with a space or punctuation, it is probably split
-        if re.search(rf"[{EST_ALPHABET_REGEX}0-9:-]$", word.text):
+        # If the word doesn't end with a space or period, it is probably split
+        if re.search(rf"[{EST_ALPHABET_REGEX}0-9:,\-\/]$", word.text):
             words[i + 1] = Word(
                 word.text + words[i + 1].text,
                 word.start,
