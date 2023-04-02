@@ -2,12 +2,15 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+import zipfile
 
 from estnltk import Text
 from loguru import logger
+from tqdm import tqdm
 
 from auto_politseikroonika.language_consts import EST_ALPHABET_REGEX, WordClass
 from tts_preprocess_et.convert import convert_sentence
@@ -324,13 +327,31 @@ def extract_clip(input_wav, output_wav, start, end):
     )
 
 
+def zip_dataset(wav_dir, metadata_file, dataset_name):
+    """Create a zip file containing the WAV files and metadata file."""
+    zip_file = f"{dataset_name}.zip"
+    # Add the metadata file and all WAV files to the zip file. Display a progress bar
+    # using tqdm.
+    with zipfile.ZipFile(zip_file, "w") as zipf:
+        zipf.write(metadata_file, "metadata.csv")
+        for wav_file in tqdm(
+            os.listdir(wav_dir), desc="Creating zip file", unit="file"
+        ):
+            zipf.write(os.path.join(wav_dir, wav_file), os.path.join("wavs", wav_file))
+    return zip_file
+
+
 def main(args):
     _setup_logging(args.verbose)
-    # Delete the output transcript file if it exists
+    # Delete the output transcript file and output directory if they already exist
     if os.path.exists(args.output_transcript):
         os.remove(args.output_transcript)
-    sentence_idx = 1
+    if os.path.exists(args.output_wav_dir):
+        shutil.rmtree(args.output_wav_dir)
+    # (Re)create the output directory
+    os.makedirs(args.output_wav_dir, exist_ok=True)
     # Iterate over all .wav files in the input directory
+    sentence_idx = 1
     for wav_file in os.listdir(args.input_wav_dir):
         # Get the corresponding transcript file
         transcript_file = os.path.join(
@@ -370,7 +391,7 @@ def main(args):
                 f.write(sentence_id + ".wav|" + sentence.text + "\n")
 
             sentence_idx += 1
-    pass
+    zip_dataset(args.output_wav_dir, args.output_transcript, args.dataset_name)
 
 
 def _parse_args():
@@ -388,6 +409,11 @@ def _parse_args():
         "--output_transcript",
         default="input\\metadata.csv",
         help="Output transcript file",
+    )
+    parser.add_argument(
+        "--dataset_name",
+        default="dataset",
+        help="Name of the dataset (used for the zip file)",
     )
     parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Verbosity (-v, -vv, etc)"
