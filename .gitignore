@@ -1,5 +1,7 @@
 input
+output
 
 .vscode
 
 *.pyc
+__pycache__
