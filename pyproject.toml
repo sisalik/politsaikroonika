@@ -13,6 +13,7 @@ tts_preprocess_et = {path = "tts_preprocess_et", develop = true}
 estnltk = "1.6.9.1b"
 loguru = "^0.6.0"
 tqdm = "^4.65.0"
+openai = "^0.27.4"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.3.0"

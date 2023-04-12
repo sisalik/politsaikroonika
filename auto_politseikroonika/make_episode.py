@@ -1,11 +1,14 @@
 import argparse
 import contextlib
 import math
+import os
 import random
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
+import openai
 from estnltk import Text
 from loguru import logger
 from tqdm import tqdm
@@ -38,6 +41,8 @@ VIDEO_FPS = 8
 VIDEO_FRAMES_MIN = 16
 # Maximum number of frames to generate for a video (otherwise you run out of VRAM)
 VIDEO_FRAMES_MAX = 48
+# OpenAI model to use for text generation
+OPENAI_MODEL = "gpt-3.5-turbo"
 
 
 def _parse_args():
@@ -46,7 +51,34 @@ def _parse_args():
     parser.add_argument(
         "-r", "--redo", action="store_true", help="Redo existing episodes"
     )
+    parser.add_argument(
+        "-n",
+        "--no-openai",
+        action="store_true",
+        help="Skip OpenAI and use hardcoded responses",
+    )
     return parser.parse_args()
+
+
+def _prompt_openai_model(prompt, max_tokens=300, temperature=0.7):
+    """Initialize OpenAI API and make a request."""
+    openai.api_key = os.environ["OPENAI_API_KEY"]
+    response = openai.ChatCompletion.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    response_text = response["choices"][0]["message"]["content"]
+    stop_reason = response["choices"][0]["finish_reason"]
+    if stop_reason == "length":
+        logger.warning("OpenAI API returned a truncated response")
+    elif stop_reason != "stop":
+        logger.warning(f"OpenAI API returned an unexpected stop reason: {stop_reason}")
+    logger.debug(f"Total tokens: {response['usage']['total_tokens']}")
+    logger.debug(f"Stop reason: {stop_reason}")
+    logger.debug(f"Response text:\n{response_text}")
+    return response_text
 
 
 def _run_in_venv(venv, *commands):
@@ -120,17 +152,76 @@ def _seconds_to_frame_splits(seconds):
         return [frames]
 
 
-def gen_title():
+def gen_title(no_openai=False):
     """Generate a title for the episode."""
-    # TODO: Replace with call to OpenAI API
-    return "Karu ründas joogis meest Võrumaal sauna ees"
+    if no_openai:
+        return "Vanaproua tõstis oma korteris üles kasvatatud krokodilli politsei sekkumiseta"
+    prompt = """
+Generate titles for an Estonian police and crime news TV segment. There should be 5 titles and each one should be numbered. Each title should be in Estonian and describe an incredibly bizarre, tragic and specific criminal event. It should include who was involved and where it happened. Some examples:
+- Honda juht sõitis meelega otsa ohutussaarel olnud inimestele
+- Jõgi neelas veoki ja kaks traktorit
+- 82-aastane vanahärra keeras auto katusele
+- Lapsed kihutasid Datsuniga sillalt alla
+- Lennuk maandus Pirita rannas
+- Maardu kandis jäi põder auto alla
+- Mees jäi hammastega rooli külge kinni
+- Purjus ja lubadeta mootorrattur rammis bussi
+- 62-aastane Uno röövis panka
+- Röövlid õhkasid Õismäel pangaautomaadi
+- Tabati leidlikud salapiirituse valmistajad
+- Politseireid Sõle tänava bordelli kulges vägivaldselt
+- Narkomaanid varastasid raamatukogu tühjaks
+- Politsei arreteeris Kopli narkodiilerid suurte jõududega
+- Vanas sõjaväetelgis avastati ebahügieeniline vorstivabrik"""
+    response = _prompt_openai_model(prompt.strip())
+    # Convert the numbered list to a Python list
+    title_candidates = re.findall(r"^\d+\. (.+)$", response, re.MULTILINE)
+    # Convert back to a string for the next prompt
+    title_candidates_str = "\n".join(
+        f"{i + 1}. {title}" for i, title in enumerate(title_candidates)
+    )
+    prompt = f"""
+Which one of these sentences in Estonian stands out as the one you would least expect to see as a news headline? Pick the most unexpected and weird one. Only reply with the number.
+{title_candidates_str}"""
+    title = _prompt_openai_model(prompt.strip(), max_tokens=1)  # Only need the number
+    try:
+        selected_title = title_candidates[int(title) - 1]
+    except ValueError:
+        raise ValueError(f"Invalid title number: {title}")
+    # Remove the number from the title
+    return selected_title
 
 
-def gen_script(title):
+def gen_summary(title, no_openai=False):
+    """Generate a summary for the episode."""
+    if no_openai:
+        return "An elderly woman in Estonia raised a crocodile in her apartment without any police intervention. The woman claimed the crocodile was her late husband's pet and she couldn't bear to part with it. Neighbors reported the animal to authorities, but the woman was allowed to keep it after proving she could care for it properly."
+    prompt = f"""
+Imagine there is a crime news article in Estonian titled "{title}". Can you make up a short 3-sentence summary of the events that took place, including a bizarre reason/explanation/motive?"""
+    return _prompt_openai_model(prompt.strip())
+
+
+def gen_script(summary, no_openai=False):
     """Generate a script for the episode."""
-    # TODO: Replace with call to OpenAI API
-    return "Tere, head vaatajad. Meil on teile täna väga kummaline uudis Võrumaalt. Just eile õhtul, sauna ees, karu ründas joobes meest. Ohvri käitumine, mis sellise rünnaku põhjustas, jääb kahjuks teadmata. Karu ründas teda väga julmalt ja mees sai vigastada. Kahjuks ei saa me öelda, kas alkohol tarbiti enne või pärast rünnakut. Karu liikus läheduses olnud metsast välja ning tegi selle rünnaku. Politsei saabus sündmuskohale kiiresti ja tegi kõik endast oleneva, et meest aidata. Oleme siiski pettunud, et selline kuritegu juhtus. Nagu vanasõna ütleb, metsas liigub metsa moodi."
-    # return "Tere, head vaatajad. Meil on teile täna väga kummaline uudis Võrumaalt."
+    if no_openai:
+        return "Tere õhtust ja tere tulemast meie uudistesse! Täna räägime teile ühest kummalisest juhtumist Eesti linnas. Nimelt avastasid naabrid, et üks vanem naine kasvatas oma korteris krokodilli! Naine väitis, et tegemist on tema hiljuti surnud abikaasa lemmikloomaga ning ta ei taha sellest loobuda. Pärast politsei sekkumist suutis naine tõestada, et ta on looma eest hoolitsemiseks piisavalt pädev ning krokodill lubati tema juures edasi elada. Kuidas see võimalik oli? Kas politsei tegi õigesti? Kas on turvaline elada krokodilli kõrval? Küsimused, mis jätavad meid mõtlema."
+    prompt = f"""
+Generate the script for an Estonian police and crime news TV segment. The segment is written in the Estonian language and its short summary is as follows:
+
+"{summary}"
+
+Constraints are listed below, in no particular order. Do not follow these as plot points in chronological order; use them as guidance throughout the script, in random order.
+- The word count should be up to 120 words
+- The script is intended to be read out by the news reporter for a made-up TV channel
+- Start by addressing the TV channel viewers and stating the location and time of the event
+- The criminal events should be rather strange and oddly specific
+- Describe the tragic events and casualties in an edgy and poetic, yet graphic and detailed manner
+- Speak somewhat demeaningly of the victims
+- Describe the actions of the police officers
+- Use old-fashioned metaphors and proverbs
+- End with one sentence with a thought-provoking statement that is not obvious or cliché, e.g. crime is bad
+- Do not address the viewers again or sign off at the end of the segment"""
+    return _prompt_openai_model(prompt.strip())
 
 
 def split_sentences(script):
@@ -190,19 +281,41 @@ def create_subtitles(sentences, audio_lenghts, ep_idx):
     return filename
 
 
-def gen_video_prompts(title):
+def gen_video_prompts(summary, no_openai=False):
     """Generate video prompts for the episode."""
-    # TODO: Replace with call to OpenAI API
-    api_response_split = [
-        "Man sitting outside sauna, holding a bottle of alcohol, dark clothes, blurry background, night time",
-        "Forest area, close-up of bear paw print in mud, leaves, twigs and dirt visible",
-        "A small clearing in the forest, man lying on the ground, blood on his clothes, dark forest in the background",
-        "Police car with flashing lights parked on a dirt road, ambulance in the background, police officers with guns, yellow vests",
-        "Close-up of a tranquilized bear lying on the ground, brown fur visible, forest in the background.",
-    ]
+    if no_openai:
+        video_prompts = [
+            "elderly woman in floral dress holding a small crocodile, apartment interior with yellow walls, potted plants, cluttered",
+            "neighbors gathered outside apartment, pointing and gesturing, police officers in blue uniforms, clipboard, serious expressions",
+            "elderly woman smiling, petting the crocodile on her lap, police officers nodding in approval, apartment background with patterned curtains and wooden furniture",
+            "close-up of the crocodile's scaly skin and sharp teeth, woman feeding it raw meat, kitchen in background with stainless steel appliances and tiled backsplash",
+            "woman walking the crocodile on a leash in a nearby park, green grass, trees, passerby staring in disbelief",
+        ]
+        video_prompts = [prompt + VIDEO_STYLE_EXTRA for prompt in video_prompts]
+        return [REPORTER_PROMPT] + video_prompts + [REPORTER_PROMPT]
+    prompt = f"""
+Generate captions for a photographic storyboard for an Estonian police and crime news TV segment. The segment is written in the Estonian language and its short summary is as follows:
+
+"{summary}"
+
+There should be 5 captions in total. The captions should be:
+- written in very terse, news style English
+- describe photographic stills of the news segment
+- one per line
+- formatted as a comma-separated list of key words and phrases, omitting verbs
+- include detailed information about the subject (color, shape, texture, size), background and image style
+- in chronological order to form a coherent story
+
+Examples:
+- close-up of a green rusty door, small hidden opening, people entering, flashlight
+- interior of abandoned building, large vats and pipes, various bottles and containers, cobwebs, dark, ambient lighting
+- factory exterior, large crowd of onlookers, police officers, police cars, flashing lights"""
+    response = _prompt_openai_model(prompt.strip())
+    # Convert the Markdown bulleted list of prompts into a Python list
+    video_prompts = re.findall(r"[-+*]\s+(.*)", response)
     # Append the style prompt to each API response
-    api_response_split = [prompt + VIDEO_STYLE_EXTRA for prompt in api_response_split]
-    return [REPORTER_PROMPT] + api_response_split + [REPORTER_PROMPT]
+    video_prompts = [prompt + VIDEO_STYLE_EXTRA for prompt in video_prompts]
+    return [REPORTER_PROMPT] + video_prompts + [REPORTER_PROMPT]
 
 
 def distribute_prompts(prompts, audio_lengths):
@@ -261,27 +374,25 @@ def gen_video_clips(prompts, lengths, ep_idx):
     return dirs
 
 
-def make_episode(ep_idx):
+def make_episode(ep_idx, no_openai=False):
     """Make a single episode with a given index."""
     print()
     logger.info(f"Making episode {ep_idx:03d}...")
     logger.info("Generating episode title...")
-    title = gen_title()
+    title = gen_title(no_openai)
     logger.info(f"Episode title: {title}")
 
+    logger.info("Generating episode summary...")
+    summary = gen_summary(title, no_openai)
+    logger.info(f"Episode summary:\n{summary}")
+
     logger.info("Generating episode script...")
-    script = gen_script(title)
+    script = gen_script(summary, no_openai)
     logger.info(f"Episode script:\n{script}")
     sentences = [convert_sentence(s) for s in split_sentences(script)]
 
     logger.info(f"Generating audio for {len(sentences)} sentences...")
     audio_files = gen_audio(sentences, ep_idx)
-    # audio_files = [
-    #     Path(
-    #         f"./output/episode_{ep_idx:03d}/sentences/sentence_{i+1:02d}.wav"
-    #     ).resolve()
-    #     for i in range(len(sentences))
-    # ]
     audio_lengths = [_get_audio_file_duration(filename) for filename in audio_files]
     total_audio_length = sum(audio_lengths) + SILENCE_PADDING * (len(audio_lengths) - 1)
     for sentence, length in zip(sentences, audio_lengths):
@@ -293,7 +404,7 @@ def make_episode(ep_idx):
     subtitles_file = create_subtitles(sentences, audio_lengths, ep_idx)
 
     logger.info("Generating video prompts...")
-    prompts = gen_video_prompts(title)
+    prompts = gen_video_prompts(summary, no_openai)
     prompts, prompt_lenghts = distribute_prompts(prompts, audio_lengths)
     for prompt, length in zip(prompts, prompt_lenghts):
         short_prompt = prompt[:50] + "..." if len(prompt) > 50 else prompt
@@ -311,7 +422,7 @@ def make_episodes(args):
     last_episode_idx = int(episode_dirs[-1].name.split("_")[-1])
     if args.redo:
         # Delete the last args.count episodes
-        start_idx = min(0, last_episode_idx - args.count + 1)
+        start_idx = max(0, last_episode_idx - args.count + 1)
     else:
         start_idx = last_episode_idx + 1
     for i in range(start_idx, start_idx + args.count):
@@ -319,7 +430,7 @@ def make_episodes(args):
         episode_dir = Path(f"output/episode_{i:03d}")
         if episode_dir.exists():
             shutil.rmtree(episode_dir)
-        make_episode(i)
+        make_episode(i, args.no_openai)
 
 
 if __name__ == "__main__":
