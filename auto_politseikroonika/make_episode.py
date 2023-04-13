@@ -361,8 +361,9 @@ Examples:
 - interior of abandoned building, large vats and pipes, various bottles and containers, cobwebs, dark, ambient lighting
 - factory exterior, large crowd of onlookers, police officers, police cars, flashing lights"""
     response = _prompt_openai_model(prompt.strip())
-    # Convert the Markdown bulleted list of prompts into a Python list
-    video_prompts = re.findall(r"[-+*]\s+(.*)", response)
+    video_prompts = (line.strip() for line in response.splitlines() if line.strip())
+    # Remove bullet points in case there are any
+    video_prompts = [re.sub(r"^\s*[-*+]\s*", "", prompt) for prompt in video_prompts]
     # Append the style prompt to each API response
     video_prompts = [prompt + VIDEO_STYLE_EXTRA for prompt in video_prompts]
     return [REPORTER_PROMPT] + video_prompts + [REPORTER_PROMPT]
