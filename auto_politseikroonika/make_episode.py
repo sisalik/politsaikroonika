@@ -25,9 +25,9 @@ PYTHON_VENVS = {
 SILENCE_PADDING = 0.3
 # Video generation prompt for the first and last shots with the reporter
 REPORTER_PROMPT = (
-    "german male reporter talking into microphone, brown mullet hair, adult, "
-    "90s black leather jacket, portrait shot, looking at camera, "
-    "standing on 80s russian city street at night, dark"
+    "norwegian adult male reporter talking into microphone, (tony hawk hair:0.9), "
+    "90s black leather jacket, portrait shot, tripod, looking at camera, "
+    "standing on 80s russian city street"
 )
 # Shared negative video generation prompt
 NEGATIVE_PROMPT = (
@@ -54,6 +54,9 @@ def _parse_args():
     parser.add_argument("-c", "--count", type=int, default=1, help="Number of episodes")
     parser.add_argument(
         "-r", "--redo", action="store_true", help="Redo existing episodes"
+    )
+    parser.add_argument(
+        "-k", "--keep_intermediate", action="store_true", help="Keep intermediate files"
     )
     parser.add_argument(
         "-n",
@@ -252,6 +255,21 @@ def split_sentences(script):
         yield sentence.enclosing_text
 
 
+def convert_sentences(raw_sentences):
+    """Convert sentences to a more pronouncable format suitable for TTS."""
+    custom_replacements = [
+        # The T is too hard
+        ("kurjategija", "kurjadegija"),
+        ("kuritegu", "kuridegu"),
+        ("kuriteo", "kurideo"),
+    ]
+    for raw in raw_sentences:
+        converted = convert_sentence(raw)
+        for old, new in custom_replacements:
+            converted = converted.lower().replace(old, new)
+        yield converted
+
+
 def gen_audio(sentences, ep_idx):
     """Generate audio files for the sentences using TTS."""
     filenames = [
@@ -347,6 +365,8 @@ def create_subtitles(sentences, audio_lenghts, ep_idx):
             start_time = f"00:00:{length_accumulator:.03f}".replace(".", ",")
             end_time = f"00:00:{length_accumulator+audio_length:.03f}".replace(".", ",")
             f.write(f"{start_time} --> {end_time}\n")
+            if sentence.endswith("."):
+                sentence = sentence[:-1]
             f.write(sentence + "\n\n")
             length_accumulator += audio_length + SILENCE_PADDING
     return filename
@@ -553,7 +573,7 @@ def merge_video_audio_subtitles(video_dir, audio_file, subtitles_file):
 def prepend_intro_and_final_render(input_file):
     """Prepend the intro and final render the video file."""
     episode_dir = input_file.parent.parent
-    output_file =  episode_dir / f"{episode_dir.name}.mp4"
+    output_file = episode_dir / f"{episode_dir.name}.mp4"
     intro_file = Path("resources/intro.mp4")
     subprocess.run(
         [
@@ -608,14 +628,15 @@ def make_episode(ep_idx, no_openai=False):
     logger.info("Generating episode script...")
     script = gen_script(summary, no_openai)
     logger.info(f"Episode script:\n{script}")
-    sentences = [convert_sentence(s) for s in split_sentences(script)]
+    raw_sentences = list(split_sentences(script))
+    converted_sentences = list(convert_sentences(raw_sentences))
 
-    logger.info(f"Generating audio for {len(sentences)} sentences...")
-    audio_files = gen_audio(sentences, ep_idx)
+    logger.info(f"Generating audio for {len(raw_sentences)} sentences...")
+    audio_files = gen_audio(converted_sentences, ep_idx)
     audio_lengths = [_get_media_file_duration(filename) for filename in audio_files]
     merged_audio_file = merge_audio(audio_files)
     total_audio_length = sum(audio_lengths) + SILENCE_PADDING * (len(audio_lengths) - 1)
-    for sentence, length in zip(sentences, audio_lengths):
+    for sentence, length in zip(raw_sentences, audio_lengths):
         short_sentence = sentence[:50] + "..." if len(sentence) > 50 else sentence
         logger.debug(f"  {short_sentence}: {length:.2f}s")
     logger.info(f"Total audio length: {total_audio_length:.2f}s")
@@ -634,15 +655,14 @@ def make_episode(ep_idx, no_openai=False):
     enhanced_clip_dirs = enhance_video_clips(clip_dirs)
     merged_video_dir = merge_video_clips(enhanced_clip_dirs)
 
-    logger.info("Adding subtitles...")
-    subtitles_file = create_subtitles(sentences, audio_lengths, ep_idx)
-
-    logger.info("Merging audio and video...")
+    logger.info("Merging audio and video and subtitles...")
+    subtitles_file = create_subtitles(raw_sentences, audio_lengths, ep_idx)
     merged_video_file = merge_video_audio_subtitles(
         merged_video_dir, merged_audio_file, subtitles_file
     )
     final_video_file = prepend_intro_and_final_render(merged_video_file)
 
+    process_duration = time.time() - process_start_time
     _record_metadata(
         Path(f"output/episode_{ep_idx:03d}/metadata.json"),
         {
@@ -652,10 +672,10 @@ def make_episode(ep_idx, no_openai=False):
             "prompts": prompts,
             "audio_duration": total_audio_length,
             "total_duration": _get_media_file_duration(final_video_file),
-            "process_duration": time.time() - process_start_time,
+            "process_duration": process_duration,
         },
     )
-    logger.success(f"Episode {ep_idx:03d} complete!")
+    logger.success(f"Episode {ep_idx:03d} completed in {process_duration/60:.1f} min")
 
 
 def make_episodes(args):
@@ -675,8 +695,12 @@ def make_episodes(args):
             logger.debug(f"Deleting {episode_dir}")
             shutil.rmtree(episode_dir)
         episode_dir.mkdir(parents=True)
-        episode_logger = logger.add(Path(f"output/episode_{i:03d}/log.txt"))
+        episode_logger = logger.add(episode_dir / "log.txt")
         make_episode(i, args.no_openai)
+        if not args.keep_intermediate:
+            logger.debug("Deleting intermediate files...")
+            shutil.rmtree(episode_dir / "clips")
+            shutil.rmtree(episode_dir / "sentences")
         logger.remove(episode_logger)
 
 
