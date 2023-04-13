@@ -457,7 +457,7 @@ def enhance_video_clips(clips_dirs):
                 "-color_primaries",
                 "2",
                 "-filter_complex",
-                "tvai_fi=model=chf-3:slowmo=3:rdt=0.01:device=0:vram=1:instances=1,tvai_up=model=thd-3:scale=0:w=1024:h=1024:noise=0:blur=0:compression=0:device=0:vram=1:instances=1,scale=w=1024:h=1024:flags=lanczos:threads=0",
+                "tvai_fi=model=apo-8:slowmo=3:rdt=0.01:device=0:vram=1:instances=1,tvai_up=model=thd-3:scale=0:w=1024:h=1024:noise=0:blur=0:compression=0:device=0:vram=1:instances=1,scale=w=1024:h=1024:flags=lanczos:threads=0",
                 "-c:v",
                 "png",
                 "-pix_fmt",
@@ -487,36 +487,12 @@ def merge_video_clips(clip_dirs):
     return output_dir
 
 
-def render_subtitles(video_dir, subtitles_file):
-    """Render hard subtitles on the video."""
-    output_dir = video_dir.parent / "subtitled"
-    output_dir.mkdir(exist_ok=True)
+def merge_video_audio_subtitles(video_dir, audio_file, subtitles_file):
+    """Merge the audio and video files into a single video file and add subtitles."""
+    # TODO: Combine this step with the final render to avoid re-encoding the video
+    merged_file = video_dir.parent.parent / "clips" / "merged.mp4"
     # Escape characters that cause problems with the ffmpeg filter syntax
     subtitle_path = str(subtitles_file).replace("\\", "/\\").replace(":", "\\\\:")
-    # TODO: Make a progress bar for this, since it takes a while
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-i",
-            str(video_dir / "%06d.png"),
-            "-vf",
-            f"subtitles={subtitle_path}",
-            str(output_dir / "%06d.png"),
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return output_dir
-
-
-def merge_audio_and_video(audio_file, video_dir):
-    """Merge the audio and video files into a single video file."""
-    episode_dir = video_dir.parent.parent
-    subtitled_file = episode_dir / "clips" / "subtitled.mp4"
-    output_file =  episode_dir / f"{episode_dir.name}.mp4"
-    # Merge the audio and video of the main part of the episode
-    # TODO: Combine this step with the next to avoid re-encoding the video
     subprocess.run(
         [
             "ffmpeg",
@@ -526,22 +502,37 @@ def merge_audio_and_video(audio_file, video_dir):
             str(video_dir / "%06d.png"),
             "-i",
             str(audio_file),
+            # Apply subtitles with a fixed font size
+            "-vf",
+            f"subtitles={subtitle_path}:force_style='Fontsize=12'",
+            # Render a lossless video to avoid quality loss in this intermediate step
             "-c:v",
             "libx264",
-            "-crf",
-            "25",
+            "-preset",
+            "ultrafast",
+            "-qp",
+            "0",
             "-c:a",
-            "aac",
+            "libmp3lame",
             "-b:a",
             "192k",
-            "-shortest",
-            str(subtitled_file),
+            # Might be needed if there is a mismatch in the audio and video lengths
+            # "-shortest",
+            str(merged_file),
         ],
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    # Prepend the intro
+    # Delete the PNG video frames
+    shutil.rmtree(video_dir)
+    return merged_file
+
+
+def prepend_intro_and_final_render(input_file):
+    """Prepend the intro and final render the video file."""
+    episode_dir = input_file.parent.parent
+    output_file =  episode_dir / f"{episode_dir.name}.mp4"
     intro_file = Path("resources/intro.mp4")
     subprocess.run(
         [
@@ -549,19 +540,34 @@ def merge_audio_and_video(audio_file, video_dir):
             "-i",
             str(intro_file),
             "-i",
-            str(subtitled_file),
+            str(input_file),
+            # Merge the two videos (audio and video streams) and scale the video to 720p
             "-filter_complex",
-            "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[outv][outa]",
+            "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[outv][outa]; "
+            "[outv]scale=-2:720[scaledv]",
             "-map",
-            "[outv]",
+            "[scaledv]",
             "-map",
             "[outa]",
+            # Render the video with a reasonably high quality
+            "-c:v",
+            "libx264",
+            "-preset",
+            "slow",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
             str(output_file),
         ],
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    # Delete the temporary video file
+    input_file.unlink()
     return output_file
 
 
@@ -608,10 +614,12 @@ def make_episode(ep_idx, no_openai=False):
 
     logger.info("Adding subtitles...")
     subtitles_file = create_subtitles(sentences, audio_lengths, ep_idx)
-    subbed_video_dir = render_subtitles(merged_video_dir, subtitles_file)
 
     logger.info("Merging audio and video...")
-    merge_audio_and_video(merged_audio_file, subbed_video_dir)
+    merged_video_file = merge_video_audio_subtitles(
+        merged_video_dir, merged_audio_file, subtitles_file
+    )
+    prepend_intro_and_final_render(merged_video_file)
 
     logger.success(f"Episode {ep_idx:03d} complete!")
 
