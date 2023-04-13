@@ -630,8 +630,12 @@ def make_episodes(args):
         # Delete the episode directory if it exists
         episode_dir = Path(f"output/episode_{i:03d}")
         if episode_dir.exists():
+            logger.debug(f"Deleting {episode_dir}")
             shutil.rmtree(episode_dir)
+        episode_dir.mkdir(parents=True)
+        episode_logger = logger.add(Path(f"output/episode_{i:03d}/log.txt"))
         make_episode(i, args.no_openai)
+        logger.remove(episode_logger)
 
 
 if __name__ == "__main__":
