@@ -1,11 +1,13 @@
 import argparse
 import contextlib
+import json
 import math
 import os
 import random
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import openai
@@ -115,11 +117,11 @@ def _run_in_venv_and_monitor_output(venv, *commands):
         raise subprocess.CalledProcessError(proc.returncode, proc.args)
 
 
-def _get_audio_file_duration(audio_file):
-    """Get audio file duration in seconds."""
+def _get_media_file_duration(media_file):
+    """Get audio/video file duration in seconds."""
     output = subprocess.run(
         "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1".split()
-        + [audio_file],
+        + [str(media_file)],
         check=True,
         capture_output=True,
         text=True,
@@ -155,6 +157,18 @@ def _seconds_to_frame_splits(seconds):
         return splits
     else:
         return [frames]
+
+
+def _record_metadata(file, metadata):
+    """Append metadata to a JSON file."""
+    if Path(file).is_file():
+        with open(file) as f:
+            data = json.load(f)
+    else:
+        data = {}
+    data.update(metadata)
+    with open(file, "w") as f:
+        json.dump(data, f, indent=4)
 
 
 def gen_title(no_openai=False):
@@ -580,6 +594,7 @@ def prepend_intro_and_final_render(input_file):
 
 def make_episode(ep_idx, no_openai=False):
     """Make a single episode with a given index."""
+    process_start_time = time.time()
     print()
     logger.info(f"Making episode {ep_idx:03d}...")
     logger.info("Generating episode title...")
@@ -597,7 +612,7 @@ def make_episode(ep_idx, no_openai=False):
 
     logger.info(f"Generating audio for {len(sentences)} sentences...")
     audio_files = gen_audio(sentences, ep_idx)
-    audio_lengths = [_get_audio_file_duration(filename) for filename in audio_files]
+    audio_lengths = [_get_media_file_duration(filename) for filename in audio_files]
     merged_audio_file = merge_audio(audio_files)
     total_audio_length = sum(audio_lengths) + SILENCE_PADDING * (len(audio_lengths) - 1)
     for sentence, length in zip(sentences, audio_lengths):
@@ -626,8 +641,20 @@ def make_episode(ep_idx, no_openai=False):
     merged_video_file = merge_video_audio_subtitles(
         merged_video_dir, merged_audio_file, subtitles_file
     )
-    prepend_intro_and_final_render(merged_video_file)
+    final_video_file = prepend_intro_and_final_render(merged_video_file)
 
+    _record_metadata(
+        Path(f"output/episode_{ep_idx:03d}/metadata.json"),
+        {
+            "title": title,
+            "summary": summary,
+            "script": script,
+            "prompts": prompts,
+            "audio_duration": total_audio_length,
+            "total_duration": _get_media_file_duration(final_video_file),
+            "process_duration": time.time() - process_start_time,
+        },
+    )
     logger.success(f"Episode {ep_idx:03d} complete!")
 
 
