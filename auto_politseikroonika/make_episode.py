@@ -21,8 +21,6 @@ PYTHON_VENVS = {
 }
 # Silence between sentences in seconds
 SILENCE_PADDING = 0.3
-# Offset the start time of the subtitles to allow for the intro
-INTRO_LENGTH = 4.08
 # Video generation prompt for the first and last shots with the reporter
 REPORTER_PROMPT = (
     "german male reporter talking into microphone, brown mullet hair, adult, "
@@ -43,6 +41,10 @@ VIDEO_FRAMES_MIN = 16
 VIDEO_FRAMES_MAX = 48
 # OpenAI model to use for text generation
 OPENAI_MODEL = "gpt-3.5-turbo"
+# Topaz Video AI model path
+TOPAZ_MODEL_DIR = Path("C:/ProgramData/Topaz Labs LLC/Topaz Video AI/models")
+# Topaz Video AI ffmpeg executable path
+TOPAZ_FFMPEG = Path("C:/Program Files/Topaz Labs LLC/Topaz Video AI/ffmpeg.exe")
 
 
 def _parse_args():
@@ -127,13 +129,10 @@ def _seconds_to_frame_splits(seconds):
     if frames <= VIDEO_FRAMES_MIN:
         return [VIDEO_FRAMES_MIN]
     elif frames > VIDEO_FRAMES_MAX:
-        # Initially split the video into multiple parts with even lengths
-        n_parts = math.ceil(frames / VIDEO_FRAMES_MAX)
-        # even_splits = [math.ceil(frames / n_parts)] * n_parts
-        # even_splits[-1] -= sum(even_splits) - frames
         # Randomly shuffle the split points, ensuring that each split between
         # VIDEO_FRAMES_MIN and VIDEO_FRAMES_MAX frames long
         splits = []
+        n_parts = math.ceil(frames / VIDEO_FRAMES_MAX)
         for i in range(n_parts - 1):
             remaining_frames = frames - sum(splits)
             # Lower bound, assuming that the remaining splits are all at the
@@ -266,9 +265,60 @@ def gen_audio(sentences, ep_idx):
     return filenames
 
 
+def merge_audio(audio_files):
+    """Merge audio files into one, inserting silence between each file."""
+    # Create a temporary audio file that contains silence for SILENCE_PADDING seconds
+    silence_file = audio_files[0].parent / "silence.wav"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anullsrc=r=22050:cl=mono",
+            "-t",
+            str(SILENCE_PADDING),
+            str(silence_file),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    # Add a silence file between each audio file. This is done by duplicating each
+    # list element (except for the last one) and replacing every second element with
+    # the silence file.
+    audio_files = [audio_file for audio_file in audio_files for _ in range(2)][:-1]
+    audio_files[1::2] = [silence_file for _ in range(len(audio_files) // 2)]
+    # Merge the audio files
+    input_args = []
+    filter_args = ""
+    for i, audio_file in enumerate(audio_files):
+        input_args.extend(["-i", audio_file])
+        filter_args += f"[{i}:0]"
+
+    out_file = audio_files[0].parent / "sentences.wav"
+    subprocess.run(
+        [
+            "ffmpeg",
+            *input_args,
+            "-filter_complex",
+            f"{filter_args}concat=n={len(audio_files)}:v=0:a=1[out]",
+            "-map",
+            "[out]",
+            str(out_file),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    # Remove the temporary silence file
+    silence_file.unlink()
+    return out_file
+
+
 def create_subtitles(sentences, audio_lenghts, ep_idx):
     """Create subtitles for the episode, in SRT format."""
-    length_accumulator = INTRO_LENGTH
+    length_accumulator = 0
     filename = Path(f"output/episode_{ep_idx:03d}/subtitles.srt").resolve()
     with open(filename, "w", encoding="utf-8") as f:
         for i, (sentence, audio_length) in enumerate(zip(sentences, audio_lenghts)):
@@ -374,6 +424,146 @@ def gen_video_clips(prompts, lengths, ep_idx):
     return dirs
 
 
+def enhance_video_clips(clips_dirs):
+    """Interpolate and upscale video frames using Topaz Video AI."""
+    # Set Topaz Video AI environment variables
+    os.environ["TVAI_MODEL_DATA_DIR"] = str(TOPAZ_MODEL_DIR)
+    os.environ["TVAI_MODEL_DIR"] = str(TOPAZ_MODEL_DIR)
+    output_dirs = []
+    for clip_dir in tqdm(clips_dirs, unit="clip"):
+        input_sequence = clip_dir / "%06d.png"
+        output_sequence = clip_dir / "enhanced" / "%06d.png"
+        output_sequence.parent.mkdir(exist_ok=True)
+        output_dirs.append(output_sequence.parent)
+        # TODO: Thread this and run two instances of ffmpeg at the same time
+        subprocess.run(
+            [
+                TOPAZ_FFMPEG,
+                "-nostdin",
+                "-y",
+                "-framerate",
+                "24",
+                "-start_number",
+                "0",
+                "-i",
+                input_sequence,
+                "-sws_flags",
+                "spline+accurate_rnd+full_chroma_int",
+                "-color_trc",
+                "2",
+                "-colorspace",
+                "0",
+                "-color_primaries",
+                "2",
+                "-filter_complex",
+                "tvai_fi=model=chf-3:slowmo=3:rdt=0.01:device=0:vram=1:instances=1,tvai_up=model=thd-3:scale=0:w=1024:h=1024:noise=0:blur=0:compression=0:device=0:vram=1:instances=1,scale=w=1024:h=1024:flags=lanczos:threads=0",
+                "-c:v",
+                "png",
+                "-pix_fmt",
+                "rgb24",
+                "-start_number",
+                "0",
+                output_sequence,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    return output_dirs
+
+
+def merge_video_clips(clip_dirs):
+    """Merge the video clips (image sequences) into a single video."""
+    output_dir = clip_dirs[0].parent.parent / "merged"
+    output_dir.mkdir(exist_ok=True)
+
+    frame_idx = 0
+    for clip_dir in clip_dirs:
+        for png_file in clip_dir.glob("*.png"):
+            new_filename = f"{frame_idx:06d}.png"
+            shutil.copy(png_file, output_dir / new_filename)
+            frame_idx += 1
+    return output_dir
+
+
+def render_subtitles(video_dir, subtitles_file):
+    """Render hard subtitles on the video."""
+    output_dir = video_dir.parent / "subtitled"
+    output_dir.mkdir(exist_ok=True)
+    # Escape characters that cause problems with the ffmpeg filter syntax
+    subtitle_path = str(subtitles_file).replace("\\", "/\\").replace(":", "\\\\:")
+    # TODO: Make a progress bar for this, since it takes a while
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-i",
+            str(video_dir / "%06d.png"),
+            "-vf",
+            f"subtitles={subtitle_path}",
+            str(output_dir / "%06d.png"),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return output_dir
+
+
+def merge_audio_and_video(audio_file, video_dir):
+    """Merge the audio and video files into a single video file."""
+    episode_dir = video_dir.parent.parent
+    subtitled_file = episode_dir / "clips" / "subtitled.mp4"
+    output_file =  episode_dir / f"{episode_dir.name}.mp4"
+    # Merge the audio and video of the main part of the episode
+    # TODO: Combine this step with the next to avoid re-encoding the video
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-framerate",
+            "24",
+            "-i",
+            str(video_dir / "%06d.png"),
+            "-i",
+            str(audio_file),
+            "-c:v",
+            "libx264",
+            "-crf",
+            "25",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+            str(subtitled_file),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    # Prepend the intro
+    intro_file = Path("resources/intro.mp4")
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-i",
+            str(intro_file),
+            "-i",
+            str(subtitled_file),
+            "-filter_complex",
+            "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[outv][outa]",
+            "-map",
+            "[outv]",
+            "-map",
+            "[outa]",
+            str(output_file),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return output_file
+
+
 def make_episode(ep_idx, no_openai=False):
     """Make a single episode with a given index."""
     print()
@@ -394,14 +584,12 @@ def make_episode(ep_idx, no_openai=False):
     logger.info(f"Generating audio for {len(sentences)} sentences...")
     audio_files = gen_audio(sentences, ep_idx)
     audio_lengths = [_get_audio_file_duration(filename) for filename in audio_files]
+    merged_audio_file = merge_audio(audio_files)
     total_audio_length = sum(audio_lengths) + SILENCE_PADDING * (len(audio_lengths) - 1)
     for sentence, length in zip(sentences, audio_lengths):
         short_sentence = sentence[:50] + "..." if len(sentence) > 50 else sentence
         logger.debug(f"  {short_sentence}: {length:.2f}s")
     logger.info(f"Total audio length: {total_audio_length:.2f}s")
-
-    logger.info("Creating subtitles...")
-    subtitles_file = create_subtitles(sentences, audio_lengths, ep_idx)
 
     logger.info("Generating video prompts...")
     prompts = gen_video_prompts(summary, no_openai)
@@ -412,6 +600,18 @@ def make_episode(ep_idx, no_openai=False):
 
     logger.info("Generating video clips...")
     clip_dirs = gen_video_clips(prompts, prompt_lenghts, ep_idx)
+
+    logger.info("Enhancing video clips...")
+    enhanced_clip_dirs = enhance_video_clips(clip_dirs)
+    merged_video_dir = merge_video_clips(enhanced_clip_dirs)
+
+    logger.info("Adding subtitles...")
+    subtitles_file = create_subtitles(sentences, audio_lengths, ep_idx)
+    subbed_video_dir = render_subtitles(merged_video_dir, subtitles_file)
+
+    logger.info("Merging audio and video...")
+    merge_audio_and_video(merged_audio_file, subbed_video_dir)
+
     logger.success(f"Episode {ep_idx:03d} complete!")
 
 
