@@ -62,25 +62,31 @@ def _parse_args():
     return parser.parse_args()
 
 
-def _prompt_openai_model(prompt, max_tokens=300, temperature=0.7):
+def _prompt_openai_model(
+    prompt, max_tokens=320, temperature=0.7, allow_truncated=False, max_attempts=10
+):
     """Initialize OpenAI API and make a request."""
     openai.api_key = os.environ["OPENAI_API_KEY"]
-    response = openai.ChatCompletion.create(
-        model=OPENAI_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-        temperature=temperature,
-    )
-    response_text = response["choices"][0]["message"]["content"]
-    stop_reason = response["choices"][0]["finish_reason"]
-    if stop_reason == "length":
-        logger.warning("OpenAI API returned a truncated response")
-    elif stop_reason != "stop":
-        logger.warning(f"OpenAI API returned an unexpected stop reason: {stop_reason}")
-    logger.debug(f"Total tokens: {response['usage']['total_tokens']}")
-    logger.debug(f"Stop reason: {stop_reason}")
-    logger.debug(f"Response text:\n{response_text}")
-    return response_text
+    for attempt in range(max_attempts):
+        response = openai.ChatCompletion.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        response_text = response["choices"][0]["message"]["content"]
+        stop_reason = response["choices"][0]["finish_reason"]
+        logger.debug(f"Total tokens: {response['usage']['total_tokens']}")
+        logger.debug(f"Response text:\n{response_text}")
+        if stop_reason != "stop" and not allow_truncated:
+            logger.warning(
+                f"OpenAI API returned an unexpected stop reason: {stop_reason}"
+            )
+            logger.info(f"Retrying ({attempt + 1}/{max_attempts})...")
+            continue
+
+        return response_text
+    raise Exception("OpenAI API failed to return a valid response")
 
 
 def _run_in_venv(venv, *commands):
@@ -182,7 +188,8 @@ Generate titles for an Estonian police and crime news TV segment. There should b
     prompt = f"""
 Which one of these sentences in Estonian stands out as the one you would least expect to see as a news headline? Pick the most unexpected and weird one. Only reply with the number.
 {title_candidates_str}"""
-    title = _prompt_openai_model(prompt.strip(), max_tokens=1)  # Only need the number
+    # Only need the number, so allow truncated responses of length 1
+    title = _prompt_openai_model(prompt.strip(), max_tokens=1, allow_truncated=True)
     try:
         selected_title = title_candidates[int(title) - 1]
     except ValueError:
