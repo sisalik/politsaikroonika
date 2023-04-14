@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 import openai
+import toml
 from estnltk import Text
 from loguru import logger
 from tqdm import tqdm
@@ -163,15 +164,15 @@ def _seconds_to_frame_splits(seconds):
 
 
 def _record_metadata(file, metadata):
-    """Append metadata to a JSON file."""
+    """Append metadata to a TOML file."""
     if Path(file).is_file():
         with open(file) as f:
-            data = json.load(f)
+            data = toml.load(f)
     else:
         data = {}
     data.update(metadata)
     with open(file, "w") as f:
-        json.dump(data, f, indent=4)
+        toml.dump(data, f)
 
 
 def gen_title(no_openai=False):
@@ -664,7 +665,7 @@ def make_episode(ep_idx, no_openai=False):
 
     process_duration = time.time() - process_start_time
     _record_metadata(
-        Path(f"output/episode_{ep_idx:03d}/metadata.json"),
+        Path(f"output/episode_{ep_idx:03d}/episode_{ep_idx:03d}.toml"),
         {
             "title": title,
             "summary": summary,
