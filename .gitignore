@@ -3,6 +3,7 @@ output
 
 .vscode
 .env
+resources/service-secrets.json
 
 *.pyc
 __pycache__

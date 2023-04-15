@@ -17,6 +17,7 @@ from loguru import logger
 from tqdm import tqdm
 
 from tts_preprocess_et.convert import convert_sentence
+from auto_politseikroonika.google_drive import FolderUploader
 
 PYTHON_VENVS = {
     "Voice-Cloning-App": Path("Voice-Cloning-App/.venv/Scripts/python.exe"),
@@ -271,11 +272,11 @@ def convert_sentences(raw_sentences):
         yield converted
 
 
-def gen_audio(sentences, ep_idx):
+def gen_audio(sentences, ep_dir):
     """Generate audio files for the sentences using TTS."""
     filenames = [
         # Use absolute paths to avoid problems with relative paths in the venv
-        Path(f"output/episode_{ep_idx:03d}/sentences/sentence_{i+1:02d}.wav").resolve()
+        (ep_dir / f"sentences/sentence_{i+1:02d}.wav").resolve()
         for i in range(len(sentences))
     ]
     # Make sure the output directory exists
@@ -356,10 +357,10 @@ def merge_audio(audio_files):
     return out_file
 
 
-def create_subtitles(sentences, audio_lenghts, ep_idx):
+def create_subtitles(sentences, audio_lenghts, ep_dir):
     """Create subtitles for the episode, in SRT format."""
     length_accumulator = 0
-    filename = Path(f"output/episode_{ep_idx:03d}/subtitles.srt").resolve()
+    filename = (ep_dir / "subtitles.srt").resolve()
     with open(filename, "w", encoding="utf-8") as f:
         for i, (sentence, audio_length) in enumerate(zip(sentences, audio_lenghts)):
             f.write(f"{i+1}\n")
@@ -438,11 +439,11 @@ def distribute_prompts(prompts, audio_lengths):
     return dist_prompts, lenghts
 
 
-def gen_video_clips(prompts, lengths, ep_idx):
+def gen_video_clips(prompts, lengths, ep_dir):
     """Generate video clips using the prompts and lengths."""
     dirs = [
         # Use absolute paths to avoid problems with relative paths in the venv
-        Path(f"output/episode_{ep_idx:03d}/clips/clip_{i+1:02d}").resolve()
+        (ep_dir / f"clips/clip_{i+1:02d}").resolve()
         for i in range(len(prompts))
     ]
     args = []
@@ -617,7 +618,7 @@ def make_episode(ep_idx, no_openai=False):
     """Make a single episode with a given index."""
     process_start_time = time.time()
     print()
-    logger.info(f"Making episode {ep_idx:03d}...")
+    logger.info(f"Making episode {ep_dir.name}...")
     logger.info("Generating episode title...")
     title = gen_title(no_openai)
     logger.info(f"Episode title: {title}")
@@ -633,7 +634,7 @@ def make_episode(ep_idx, no_openai=False):
     converted_sentences = list(convert_sentences(raw_sentences))
 
     logger.info(f"Generating audio for {len(raw_sentences)} sentences...")
-    audio_files = gen_audio(converted_sentences, ep_idx)
+    audio_files = gen_audio(converted_sentences, ep_dir)
     audio_lengths = [_get_media_file_duration(filename) for filename in audio_files]
     merged_audio_file = merge_audio(audio_files)
     total_audio_length = sum(audio_lengths) + SILENCE_PADDING * (len(audio_lengths) - 1)
@@ -650,22 +651,23 @@ def make_episode(ep_idx, no_openai=False):
         logger.debug(f"  {short_prompt}: {length} frames")
 
     logger.info("Generating video clips...")
-    clip_dirs = gen_video_clips(prompts, prompt_lenghts, ep_idx)
+    clip_dirs = gen_video_clips(prompts, prompt_lenghts, ep_dir)
 
     logger.info("Enhancing video clips...")
     enhanced_clip_dirs = enhance_video_clips(clip_dirs)
     merged_video_dir = merge_video_clips(enhanced_clip_dirs)
 
     logger.info("Merging audio and video and subtitles...")
-    subtitles_file = create_subtitles(raw_sentences, audio_lengths, ep_idx)
+    subtitles_file = create_subtitles(raw_sentences, audio_lengths, ep_dir)
     merged_video_file = merge_video_audio_subtitles(
         merged_video_dir, merged_audio_file, subtitles_file
     )
-    final_video_file = prepend_intro_and_final_render(merged_video_file)
+    final_video_file = prepend_intro_and_final_render(merged_video_file, title)
 
     process_duration = time.time() - process_start_time
+    metadata_file = ep_dir / f"{ep_dir.name}.toml"
     _record_metadata(
-        Path(f"output/episode_{ep_idx:03d}/episode_{ep_idx:03d}.toml"),
+        metadata_file,
         {
             "title": title,
             "summary": summary,
@@ -676,14 +678,19 @@ def make_episode(ep_idx, no_openai=False):
             "process_duration": process_duration,
         },
     )
-    logger.success(f"Episode {ep_idx:03d} completed in {process_duration/60:.1f} min")
+    logger.success(f"Episode {ep_dir.name} completed in {process_duration/60:.1f} min")
+    return final_video_file, metadata_file
 
 
 def make_episodes(args):
     """Make episodes."""
     # Find the last episode index from the output directory
-    episode_dirs = sorted(Path("output").glob("episode_*"))
-    last_episode_idx = int(episode_dirs[-1].name.split("_")[-1])
+    episode_dirs = sorted(Path("output").glob("ep_*"))
+    if episode_dirs:
+        last_episode_idx = int(episode_dirs[-1].name.split("_")[1])
+    else:
+        last_episode_idx = -1  # Start from 0
+
     if args.redo:
         # Delete the last args.count episodes
         start_idx = max(0, last_episode_idx - args.count + 1)
@@ -691,13 +698,18 @@ def make_episodes(args):
         start_idx = last_episode_idx + 1
     for i in range(start_idx, start_idx + args.count):
         # Delete the episode directory if it exists
-        episode_dir = Path(f"output/episode_{i:03d}")
+        episode_dir = Path(f"output/ep_{i:03d}")
         if episode_dir.exists():
             logger.debug(f"Deleting {episode_dir}")
             shutil.rmtree(episode_dir)
         episode_dir.mkdir(parents=True)
         episode_logger = logger.add(episode_dir / "log.txt")
-        make_episode(i, args.no_openai)
+        episode_files = make_episode(episode_dir, args.avoid, args.no_openai)
+
+        logger.info("Uploading episode to Google Drive...")
+        uploader = FolderUploader(os.environ["GOOGLE_DRIVE_FOLDER_ID"])
+        for file in episode_files:
+            uploader.upload(file)
         if not args.keep_intermediate:
             logger.debug("Deleting intermediate files...")
             shutil.rmtree(episode_dir / "clips")

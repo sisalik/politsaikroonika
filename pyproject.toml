@@ -15,6 +15,7 @@ loguru = "^0.6.0"
 tqdm = "^4.65.0"
 openai = "^0.27.4"
 toml = "^0.10.2"
+pydrive2 = "^1.15.3"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.3.0"
