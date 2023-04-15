@@ -309,7 +309,7 @@ def gen_audio(sentences, ep_dir):
         Path("data/languages/Estonian/alphabet.txt"),
         *args,
     ) as proc:
-        with tqdm(total=len(sentences)) as pbar:
+        with tqdm(total=len(sentences), unit="sentence") as pbar:
             for line in proc.stdout:
                 if line.startswith("Audio file saved"):
                     pbar.update(1)
@@ -486,45 +486,48 @@ def enhance_video_clips(clips_dirs):
     os.environ["TVAI_MODEL_DATA_DIR"] = str(TOPAZ_MODEL_DIR)
     os.environ["TVAI_MODEL_DIR"] = str(TOPAZ_MODEL_DIR)
     output_dirs = []
-    for clip_dir in tqdm(clips_dirs, unit="clip"):
-        input_sequence = clip_dir / "%06d.png"
-        output_sequence = clip_dir / "enhanced" / "%06d.png"
-        output_sequence.parent.mkdir(exist_ok=True)
-        output_dirs.append(output_sequence.parent)
-        # TODO: Thread this and run two instances of ffmpeg at the same time
-        subprocess.run(
-            [
-                TOPAZ_FFMPEG,
-                "-nostdin",
-                "-y",
-                "-framerate",
-                "24",
-                "-start_number",
-                "0",
-                "-i",
-                input_sequence,
-                "-sws_flags",
-                "spline+accurate_rnd+full_chroma_int",
-                "-color_trc",
-                "2",
-                "-colorspace",
-                "0",
-                "-color_primaries",
-                "2",
-                "-filter_complex",
-                "tvai_fi=model=apo-8:slowmo=3:rdt=0.01:device=0:vram=1:instances=1,tvai_up=model=thd-3:scale=0:w=1024:h=1024:noise=0:blur=0:compression=0:device=0:vram=1:instances=1,scale=w=1024:h=1024:flags=lanczos:threads=0",
-                "-c:v",
-                "png",
-                "-pix_fmt",
-                "rgb24",
-                "-start_number",
-                "0",
-                output_sequence,
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+    total_frames = sum(len(list(clip_dir.glob("*.png"))) for clip_dir in clips_dirs)
+    with tqdm(total=total_frames, unit="frame") as pbar:
+        for clip_dir in clips_dirs:
+            input_sequence = clip_dir / "%06d.png"
+            output_sequence = clip_dir / "enhanced" / "%06d.png"
+            output_sequence.parent.mkdir(exist_ok=True)
+            output_dirs.append(output_sequence.parent)
+            # TODO: Thread this and run two instances of ffmpeg at the same time
+            subprocess.run(
+                [
+                    TOPAZ_FFMPEG,
+                    "-nostdin",
+                    "-y",
+                    "-framerate",
+                    "24",
+                    "-start_number",
+                    "0",
+                    "-i",
+                    input_sequence,
+                    "-sws_flags",
+                    "spline+accurate_rnd+full_chroma_int",
+                    "-color_trc",
+                    "2",
+                    "-colorspace",
+                    "0",
+                    "-color_primaries",
+                    "2",
+                    "-filter_complex",
+                    "tvai_fi=model=apo-8:slowmo=3:rdt=0.01:device=0:vram=1:instances=1,tvai_up=model=thd-3:scale=0:w=1024:h=1024:noise=0:blur=0:compression=0:device=0:vram=1:instances=1,scale=w=1024:h=1024:flags=lanczos:threads=0",
+                    "-c:v",
+                    "png",
+                    "-pix_fmt",
+                    "rgb24",
+                    "-start_number",
+                    "0",
+                    output_sequence,
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            pbar.update(len(list(clip_dir.glob("*.png"))))
     return output_dirs
 
 
