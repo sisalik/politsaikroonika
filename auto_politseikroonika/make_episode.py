@@ -1,6 +1,5 @@
 import argparse
 import contextlib
-import json
 import math
 import os
 import random
@@ -70,7 +69,7 @@ def _parse_args():
 
 
 def _prompt_openai_model(
-    prompt, max_tokens=320, temperature=0.7, allow_truncated=False, max_attempts=10
+    prompt, max_tokens=256, temperature=0.7, allow_truncated=False, max_attempts=10
 ):
     """Initialize OpenAI API and make a request."""
     openai.api_key = os.environ["OPENAI_API_KEY"]
@@ -83,7 +82,11 @@ def _prompt_openai_model(
         )
         response_text = response["choices"][0]["message"]["content"]
         stop_reason = response["choices"][0]["finish_reason"]
-        logger.debug(f"Total tokens: {response['usage']['total_tokens']}")
+        logger.debug(
+            f"Tokens: {response['usage']['prompt_tokens']} (prompt) + "
+            f"{response['usage']['completion_tokens']} (completion) = "
+            f"{response['usage']['total_tokens']} (total)"
+        )
         logger.debug(f"Response text:\n{response_text}")
         if stop_reason != "stop" and not allow_truncated:
             logger.warning(
@@ -181,7 +184,7 @@ def gen_title(no_openai=False):
     if no_openai:
         return "Vanaproua tõstis oma korteris üles kasvatatud krokodilli politsei sekkumiseta"
     prompt = """
-Generate titles for an Estonian police and crime news TV segment. There should be 5 titles and each one should be numbered. Each title should be in Estonian and describe an incredibly bizarre, tragic and specific criminal event. It should include who was involved and where it happened. Some examples:
+Generate titles for an Estonian police and crime news TV segment. There should be 10 titles and each one should be numbered. Each title should be in Estonian and describe an incredibly bizarre, tragic and specific criminal event. It should include who was involved and where it happened. Some examples:
 - Honda juht sõitis meelega otsa ohutussaarel olnud inimestele
 - Jõgi neelas veoki ja kaks traktorit
 - 82-aastane vanahärra keeras auto katusele
@@ -197,7 +200,7 @@ Generate titles for an Estonian police and crime news TV segment. There should b
 - Narkomaanid varastasid raamatukogu tühjaks
 - Politsei arreteeris Kopli narkodiilerid suurte jõududega
 - Vanas sõjaväetelgis avastati ebahügieeniline vorstivabrik"""
-    response = _prompt_openai_model(prompt.strip())
+    response = _prompt_openai_model(prompt.strip(), max_tokens=360)
     # Convert the numbered list to a Python list
     title_candidates = re.findall(r"^\d+\. (.+)$", response, re.MULTILINE)
     # Convert back to a string for the next prompt
@@ -246,11 +249,18 @@ Constraints are listed below, in no particular order. Do not follow these as plo
 - Use old-fashioned metaphors and proverbs
 - End with one sentence with a thought-provoking statement that is not obvious or cliché, e.g. crime is bad
 - Do not address the viewers again or sign off at the end of the segment"""
-    return _prompt_openai_model(prompt.strip())
+    # Limit the number of tokens to yield roughly 120 words or 50 seconds of audio
+    script = _prompt_openai_model(prompt.strip(), max_tokens=360)
+    # Sometimes the entire response is in quotes, so remove them
+    if script.startswith('"') and script.endswith('"'):
+        script = script[1:-1]
+    return script
 
 
 def split_sentences(script):
     """Split script into sentences using EstNLTK."""
+    # Swap any quotes and periods that throw off the sentence splitter
+    script = script.replace('."', '".')
     script_text = Text(script)
     script_text.analyse("morphology")
     for sentence in script_text.sentences:
@@ -398,6 +408,8 @@ There should be 5 captions in total. The captions should be:
 - formatted as a comma-separated list of key words and phrases, omitting verbs
 - include detailed information about the subject (color, shape, texture, size), background and image style
 - in chronological order to form a coherent story
+
+Avoid these keywords: aerial view, crowd
 
 Examples:
 - close-up of a green rusty door, small hidden opening, people entering, flashlight
@@ -572,10 +584,13 @@ def merge_video_audio_subtitles(video_dir, audio_file, subtitles_file):
     return merged_file
 
 
-def prepend_intro_and_final_render(input_file):
+def prepend_intro_and_final_render(input_file, title):
     """Prepend the intro and final render the video file."""
     episode_dir = input_file.parent.parent
-    output_file = episode_dir / f"{episode_dir.name}.mp4"
+    # Include the episode title in the output file name
+    output_file = (
+        episode_dir / f"{episode_dir.name}_{title.lower().replace(' ', '.')}.mp4"
+    )
     intro_file = Path("resources/intro.mp4")
     subprocess.run(
         [
