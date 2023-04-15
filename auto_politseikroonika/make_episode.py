@@ -440,7 +440,7 @@ def distribute_prompts(prompts, audio_lengths):
             f"Too many prompts ({len(prompts)}) for the audio ({len(splits)})."
         )
         # Slice out some of the middle prompts
-        prompts = [prompts[0]], *prompts[1 : len(splits) + 1], [prompts[-1]]
+        prompts = [prompts[0], *prompts[1 : len(splits) + 1], prompts[-1]]
     # Distribute prompts evenly, kind of like nearest neighbor scaling
     dist_prompts = []
     for i in range(len(splits)):
