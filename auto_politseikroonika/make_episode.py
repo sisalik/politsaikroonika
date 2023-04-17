@@ -56,6 +56,7 @@ def _parse_args():
     parser.add_argument(
         "-r", "--redo", action="store_true", help="Redo existing episodes"
     )
+    parser.add_argument("-a", "--avoid", type=str, action="append", help="Avoid topics")
     parser.add_argument(
         "-k", "--keep_intermediate", action="store_true", help="Keep intermediate files"
     )
@@ -65,7 +66,11 @@ def _parse_args():
         action="store_true",
         help="Skip OpenAI and use hardcoded responses",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    # Allow "--avoid topic1,topic2" syntax as well as "--avoid topic1 --avoid topic2"
+    if len(args.avoid) == 1 and "," in args.avoid[0]:
+        args.avoid = args.avoid[0].split(",")
+    return args
 
 
 def _prompt_openai_model(
@@ -179,12 +184,18 @@ def _record_metadata(file, metadata):
         toml.dump(data, f)
 
 
-def gen_title(no_openai=False):
+def gen_title(avoid_topics=None, no_openai=False):
     """Generate a title for the episode."""
     if no_openai:
         return "Vanaproua tõstis oma korteris üles kasvatatud krokodilli politsei sekkumiseta"
-    prompt = """
-Generate titles for an Estonian police and crime news TV segment. There should be 10 titles and each one should be numbered. Each title should be in Estonian and describe an incredibly bizarre, tragic and specific criminal event. It should include who was involved and where it happened. Some examples:
+    if avoid_topics:
+        avoid_prompt = (
+            f"Avoid mentioning the following topics: {', '.join(avoid_topics)}. "
+        )
+    else:
+        avoid_prompt = ""
+    prompt = f"""
+Generate titles for an Estonian police and crime news TV segment. There should be 10 titles and each one should be numbered. Each title should be in Estonian and describe an incredibly bizarre, tragic and specific criminal event. It should include who was involved and where it happened. {avoid_prompt}Some examples:
 - Honda juht sõitis meelega otsa ohutussaarel olnud inimestele
 - Jõgi neelas veoki ja kaks traktorit
 - 82-aastane vanahärra keeras auto katusele
@@ -220,12 +231,14 @@ Which one of these sentences in Estonian stands out as the one you would least e
     return selected_title
 
 
-def gen_summary(title, no_openai=False):
+def gen_summary(title, avoid_topics=None, no_openai=False):
     """Generate a summary for the episode."""
     if no_openai:
         return "An elderly woman in Estonia raised a crocodile in her apartment without any police intervention. The woman claimed the crocodile was her late husband's pet and she couldn't bear to part with it. Neighbors reported the animal to authorities, but the woman was allowed to keep it after proving she could care for it properly."
     prompt = f"""
 Imagine there is a crime news article in Estonian titled "{title}". Can you make up a short 3-sentence summary of the events that took place, including a bizarre reason/explanation/motive?"""
+    if avoid_topics:
+        prompt += f"Avoid mentioning the following topics: {', '.join(avoid_topics)}."
     return _prompt_openai_model(prompt.strip())
 
 
@@ -242,7 +255,8 @@ Constraints are listed below, in no particular order. Do not follow these as plo
 - The word count should be up to 120 words
 - The script is intended to be read out by the news reporter for a made-up TV channel
 - Start by addressing the TV channel viewers and stating the location and time of the event
-- The criminal events should be rather strange and oddly specific
+- The criminal event should be rather strange and oddly specific
+- Only write about a single criminal event, not several
 - Describe the tragic events and casualties in an edgy and poetic, yet graphic and detailed manner
 - Speak somewhat demeaningly of the victims
 - Describe the actions of the police officers
@@ -632,17 +646,17 @@ def prepend_intro_and_final_render(input_file, title):
     return output_file
 
 
-def make_episode(ep_idx, no_openai=False):
+def make_episode(ep_dir, avoid_topics, no_openai=False):
     """Make a single episode with a given index."""
     process_start_time = time.time()
     print()
     logger.info(f"Making episode {ep_dir.name}...")
     logger.info("Generating episode title...")
-    title = gen_title(no_openai)
+    title = gen_title(avoid_topics, no_openai)
     logger.info(f"Episode title: {title}")
 
     logger.info("Generating episode summary...")
-    summary = gen_summary(title, no_openai)
+    summary = gen_summary(title, avoid_topics, no_openai)
     logger.info(f"Episode summary:\n{summary}")
 
     logger.info("Generating episode script...")
