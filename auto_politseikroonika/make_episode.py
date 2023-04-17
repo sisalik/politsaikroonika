@@ -61,6 +61,13 @@ def _parse_args():
         "-k", "--keep_intermediate", action="store_true", help="Keep intermediate files"
     )
     parser.add_argument(
+        "-w",
+        "--when_done",
+        type=str,
+        choices=["sleep"],
+        help="Action to perform after episode generation",
+    )
+    parser.add_argument(
         "-n",
         "--no-openai",
         action="store_true",
@@ -128,6 +135,11 @@ def _run_in_venv_and_monitor_output(venv, *commands):
 
     if proc.returncode != 0:
         raise subprocess.CalledProcessError(proc.returncode, proc.args)
+
+
+def _pc_sleep():
+    """Put the computer to sleep."""
+    subprocess.run("rundll32.exe powrprof.dll,SetSuspendState 0,1,0".split())
 
 
 def _get_media_file_duration(media_file):
@@ -747,6 +759,8 @@ def make_episodes(args):
             shutil.rmtree(episode_dir / "clips")
             shutil.rmtree(episode_dir / "sentences")
         logger.remove(episode_logger)
+    if args.when_done == "sleep":
+        _pc_sleep()
 
 
 if __name__ == "__main__":
