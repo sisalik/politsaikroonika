@@ -99,9 +99,9 @@ def _prompt_openai_model(
         response_text = response["choices"][0]["message"]["content"]
         stop_reason = response["choices"][0]["finish_reason"]
         logger.debug(
-            f"Tokens: {response['usage']['prompt_tokens']} (prompt) + "
-            f"{response['usage']['completion_tokens']} (completion) = "
-            f"{response['usage']['total_tokens']} (total)"
+            f"Tokens: {response['usage']['prompt_tokens']} prompt + "
+            f"{response['usage']['completion_tokens']} completion = "
+            f"{response['usage']['total_tokens']}"
         )
         logger.debug(f"Response text:\n{response_text}")
         if stop_reason != "stop" and not allow_truncated:
@@ -113,14 +113,6 @@ def _prompt_openai_model(
 
         return response_text
     raise Exception("OpenAI API failed to return a valid response")
-
-
-def _run_in_venv(venv, *commands):
-    """Run commands in a specified Python virtual environment."""
-    assert Path(venv).is_dir(), f"Invalid venv path: {venv}"
-    return subprocess.run(
-        [PYTHON_VENVS[venv], *commands], check=True, capture_output=True, cwd=venv
-    )
 
 
 @contextlib.contextmanager
