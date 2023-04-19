@@ -146,6 +146,16 @@ def _pc_sleep():
     subprocess.run("rundll32.exe powrprof.dll,SetSuspendState 0,1,0".split())
 
 
+def _get_git_revision():
+    """Get the current git revision."""
+    output = subprocess.run(
+        "git describe --tags --always --dirty=-dev".split(),
+        capture_output=True,
+        text=True,
+    )
+    return output.stdout.strip()
+
+
 def _get_media_file_duration(media_file):
     """Get audio/video file duration in seconds."""
     output = subprocess.run(
@@ -766,6 +776,7 @@ def make_episode(ep_dir, interactive=False, avoid_topics=None, no_openai=False):
             "audio_duration": total_audio_length,
             "total_duration": _get_media_file_duration(final_video_file),
             "process_duration": process_duration,
+            "git_commit": _get_git_revision(),
         },
     )
     logger.success(f"Episode {ep_dir.name} completed in {process_duration/60:.1f} min")
