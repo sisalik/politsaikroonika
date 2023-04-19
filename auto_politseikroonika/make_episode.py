@@ -6,6 +6,7 @@ import random
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -55,6 +56,9 @@ def _parse_args():
     parser.add_argument("-c", "--count", type=int, default=1, help="Number of episodes")
     parser.add_argument(
         "-r", "--redo", action="store_true", help="Redo existing episodes"
+    )
+    parser.add_argument(
+        "-i", "--interactive", action="store_true", help="Interactive mode"
     )
     parser.add_argument("-a", "--avoid", type=str, action="append", help="Avoid topics")
     parser.add_argument(
@@ -152,6 +156,42 @@ def _get_media_file_duration(media_file):
         text=True,
     )
     return float(output.stdout)
+
+
+def _interactive_wrapper(interactive, output_name, func, args):
+    """Run a function, optionally prompting the user for input."""
+    if not interactive:
+        return func(*args)
+    output_verified = False
+    while not output_verified:
+        output = func(*args)
+        while True:
+            print(f"Generated {output_name}: {output}")
+            response = input(
+                f"  Y: accept this {output_name}\n"
+                f"  N: regenerate the {output_name}\n"
+                "  Q: quit\n"
+                f"  Any other text to override the {output_name}: "
+            ).strip()
+            if response.lower() == "y":
+                logger.debug(f"User selected to accept the {output_name}")
+                output_verified = True
+                break
+            elif response.lower() == "n":
+                logger.debug(f"User selected to re-generate the {output_name}")
+                break
+            elif response.lower() == "q":
+                logger.debug("User selected to quit")
+                sys.exit(0)
+            elif not response:
+                logger.error("No input provided")
+                continue
+            else:
+                logger.debug(f"User selected to override the {output_name}")
+                output = response
+                output_verified = True
+                break
+    return output
 
 
 def _seconds_to_frame_splits(seconds):
@@ -658,21 +698,27 @@ def prepend_intro_and_final_render(input_file, title):
     return output_file
 
 
-def make_episode(ep_dir, avoid_topics, no_openai=False):
+def make_episode(ep_dir, interactive=False, avoid_topics=None, no_openai=False):
     """Make a single episode with a given index."""
     process_start_time = time.time()
     print()
     logger.info(f"Making episode {ep_dir.name}...")
     logger.info("Generating episode title...")
-    title = gen_title(avoid_topics, no_openai)
+    title = _interactive_wrapper(
+        interactive, "title", gen_title, (avoid_topics, no_openai)
+    )
     logger.info(f"Episode title: {title}")
 
     logger.info("Generating episode summary...")
-    summary = gen_summary(title, avoid_topics, no_openai)
+    summary = _interactive_wrapper(
+        interactive, "summary", gen_summary, (title, avoid_topics, no_openai)
+    )
     logger.info(f"Episode summary:\n{summary}")
 
     logger.info("Generating episode script...")
-    script = gen_script(summary, no_openai)
+    script = _interactive_wrapper(
+        interactive, "script", gen_script, (summary, no_openai)
+    )
     logger.info(f"Episode script:\n{script}")
     raw_sentences = list(split_sentences(script))
     converted_sentences = list(convert_sentences(raw_sentences))
@@ -748,7 +794,9 @@ def make_episodes(args):
             shutil.rmtree(episode_dir)
         episode_dir.mkdir(parents=True)
         episode_logger = logger.add(episode_dir / "log.txt")
-        episode_files = make_episode(episode_dir, args.avoid, args.no_openai)
+        episode_files = make_episode(
+            episode_dir, args.interactive, args.avoid, args.no_openai
+        )
 
         logger.info("Uploading episode to Google Drive...")
         uploader = FolderUploader(os.environ["GOOGLE_DRIVE_FOLDER_ID"])
