@@ -283,14 +283,19 @@ Generate titles for an Estonian police and crime news TV segment. There should b
     prompt = f"""
 Which one of these sentences in Estonian stands out as the one you would least expect to see as a news headline? Pick the most unexpected and weird one. Only reply with the number.
 {title_candidates_str}"""
-    # Only need the number, so allow truncated responses of length 1
-    title = _prompt_openai_model(prompt.strip(), max_tokens=1, allow_truncated=True)
-    try:
-        selected_title = title_candidates[int(title) - 1]
-    except ValueError:
-        raise ValueError(f"Invalid title number: {title}")
-    # Remove the number from the title
-    return selected_title
+    for _ in range(10):
+        # Only need the number, so allow truncated responses of length 1
+        title_idx = _prompt_openai_model(
+            prompt.strip(), max_tokens=1, allow_truncated=True
+        )
+        try:
+            selected_title = title_candidates[int(title_idx) - 1]
+        except ValueError:
+            logger.error(f"Invalid title number: {title_idx}")
+            continue
+        # Remove the number from the title
+        return selected_title
+    raise Exception("Failed to select a title")
 
 
 def gen_summary(title, avoid_topics=None, no_openai=False):
@@ -499,8 +504,10 @@ Examples:
 - factory exterior, group of onlookers, police officers, police cars"""
     response = _prompt_openai_model(prompt.strip())
     video_prompts = (line.strip() for line in response.splitlines() if line.strip())
-    # Remove bullet points in case there are any
-    video_prompts = [re.sub(r"^\s*[-*+]\s*", "", prompt) for prompt in video_prompts]
+    # Remove bullet points and numbering in case there is any
+    video_prompts = [
+        re.sub(r"^\s*([-*+]|\d+\.)\s*", "", prompt) for prompt in video_prompts
+    ]
     # Append the style prompt to each API response
     video_prompts = [prompt + VIDEO_STYLE_EXTRA for prompt in video_prompts]
     return [REPORTER_PROMPT] + video_prompts + [REPORTER_PROMPT]
