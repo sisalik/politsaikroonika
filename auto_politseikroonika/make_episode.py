@@ -249,16 +249,24 @@ def gen_title(avoid_topics=None, no_openai=False):
     else:
         avoid_prompt = ""
     prompt = f"""
-Generate titles for an Estonian police and crime news TV segment. There should be 10 titles and each one should be numbered. Each title should be in Estonian and describe an incredibly bizarre, tragic and specific criminal event. It should include who was involved and where it happened. {avoid_prompt}Some examples:
-- Honda juht sõitis meelega otsa ohutussaarel olnud inimestele
-- Jõgi neelas veoki ja kaks traktorit
-- 82-aastane vanahärra keeras auto katusele
-- Lapsed kihutasid Datsuniga sillalt alla
+Generate titles for an Estonian police and crime news TV segment. There should be 10 titles and each one should be numbered. Each title should be in Estonian and describe an incredibly bizarre, far-fetched, tragic and specific criminal event. It should include who was involved and where it happened. {avoid_prompt}Some examples:
+- Sõbrad vedasid naise üle piiri illegaalselt
+- Kortermaja elanikud avastasid oma trepikojas krokodilli
+- Purjus autojuht sõitis otsa jõuluvanale
+- Kaks koolipoissi üritasid põgeneda politsei eest ujumisbasseini
+- Mees varastas poest 50 pakki kondoomi ja 10 purki vahuveini
+- Naine sõitis põgenedes autoga läbi poe seina
+- Hallitusjuustu varas tabati Tartus
+- Kassihull naine ründas naabrit noaga
+- Pangaröövel põgenes politsei eest ühistranspordiga
+- Kelmikad noored varastasid Vabaduse väljaku jõulukuuse
+- Naine nõudis sotsiaalmaksu tagasi ja põgenes politsei eest
+- Kassist sai politsei teraapiakoer
+- Mees hüppas politsei eest peitu toidujäätmete konteinerisse
+- Mürkidega kaubitsemine peatati Tartus
+- Salapärane laevaga seotud kuritegu Paldiskis
 - Lennuk maandus Pirita rannas
-- Maardu kandis jäi põder auto alla
 - Mees jäi hammastega rooli külge kinni
-- Purjus ja lubadeta mootorrattur rammis bussi
-- 62-aastane Uno röövis panka
 - Röövlid õhkasid Õismäel pangaautomaadi
 - Tabati leidlikud salapiirituse valmistajad
 - Politseireid Sõle tänava bordelli kulges vägivaldselt
@@ -309,12 +317,14 @@ Constraints are listed below, in no particular order. Do not follow these as plo
 - The word count should be up to 120 words
 - The script is intended to be read out by the news reporter for a made-up TV channel
 - Start by addressing the TV channel viewers and stating the location and time of the event
+- Describe the tragic events and casualties at length in a detailed manner
+- Discuss the motives of the criminal
+- Use poetic and edgy, yet graphic language
+- Use old-fashioned metaphors and proverbs
 - The criminal event should be rather strange and oddly specific
 - Only write about a single criminal event, not several
-- Describe the tragic events and casualties in an edgy and poetic, yet graphic and detailed manner
 - Speak somewhat demeaningly of the victims
-- Describe the actions of the police officers
-- Use old-fashioned metaphors and proverbs
+- Briefly describe the actions of the police officers
 - End with one sentence with a thought-provoking statement that is not obvious or cliché, e.g. crime is bad
 - Do not address the viewers again or sign off at the end of the segment"""
     # Limit the number of tokens to yield roughly 120 words or 50 seconds of audio
@@ -469,20 +479,24 @@ Generate captions for a photographic storyboard for an Estonian police and crime
 
 "{summary}"
 
-There should be 5 captions in total. The captions should be:
-- written in very terse, news style English
+There should be 5 captions in total. The captions should:
+- be written in very terse, news style English, with descriptive keywords and adjectives
 - describe photographic stills of the news segment
-- one per line
-- formatted as a comma-separated list of key words and phrases, omitting verbs
+- focus on the main characters and criminal events
+- be one per line, focussed on a single subject and avoiding too many different concepts
+- avoid concepts that are too abstract or general to be visualized
+- avoid specific geographic locations
 - include detailed information about the subject (color, shape, texture, size), background and image style
-- in chronological order to form a coherent story
-
-Avoid these keywords: aerial view, crowd
+- be formatted as a comma-separated list of key words and phrases, omitting verbs
+- be in chronological order to form a coherent story
+- avoid these keywords: aerial view, close-up, crowd
 
 Examples:
-- close-up of a green rusty door, small hidden opening, people entering, flashlight
+- man wearing a hoodie, criminal, holding a gun, threatening, pointing at the camera
+- car chase, city street, police cars, sirens, flashing lights
+- green rusty door, small hidden opening, people entering, flashlight
 - interior of abandoned building, large vats and pipes, various bottles and containers, cobwebs, dark, ambient lighting
-- factory exterior, large crowd of onlookers, police officers, police cars, flashing lights"""
+- factory exterior, group of onlookers, police officers, police cars"""
     response = _prompt_openai_model(prompt.strip())
     video_prompts = (line.strip() for line in response.splitlines() if line.strip())
     # Remove bullet points in case there are any
