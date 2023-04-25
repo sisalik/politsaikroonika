@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 from typing import Union
@@ -12,6 +13,9 @@ class FolderUploader:
     def __init__(self, folder_id: str) -> None:
         self._drive = GoogleDrive(self._login())
         self._folder_id = folder_id
+        # Set a higher log level for oauth2client to avoid noisy logs
+        oauth2client_logger = logging.getLogger("oauth2client")
+        oauth2client_logger.setLevel(logging.WARNING)
 
     def upload(self, file_path: Union[str, os.PathLike]) -> None:
         """Upload file to Google Drive folder."""
