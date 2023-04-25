@@ -451,9 +451,8 @@ def merge_audio(audio_files):
         stderr=subprocess.DEVNULL,
     )
     # Add a silence file between each audio file. This is done by duplicating each
-    # list element (except for the last one) and replacing every second element with
-    # the silence file.
-    audio_files = [audio_file for audio_file in audio_files for _ in range(2)][:-1]
+    # list element and replacing every second element with the silence file.
+    audio_files = [audio_file for audio_file in audio_files for _ in range(2)]
     audio_files[1::2] = [silence_file for _ in range(len(audio_files) // 2)]
     # Merge the audio files
     input_args = []
@@ -551,7 +550,7 @@ def distribute_prompts(prompts, audio_lengths):
     opening_length = _seconds_to_frame_splits(audio_lengths[0])[0]
     closing_length = _seconds_to_frame_splits(audio_lengths[-1])[0]
     # Split the remaining duration among the other prompts
-    total_audio_length = sum(audio_lengths) + SILENCE_PADDING * (len(audio_lengths) - 1)
+    total_audio_length = sum(audio_lengths) + SILENCE_PADDING * len(audio_lengths)
     remaining_length = (
         total_audio_length - (opening_length + closing_length) / VIDEO_FPS
     )
@@ -782,7 +781,7 @@ def make_episode(ep_dir, interactive=False, avoid_topics=None, no_openai=False):
     audio_files = gen_audio(converted_sentences, ep_dir)
     audio_lengths = [_get_media_file_duration(filename) for filename in audio_files]
     merged_audio_file = merge_audio(audio_files)
-    total_audio_length = sum(audio_lengths) + SILENCE_PADDING * (len(audio_lengths) - 1)
+    total_audio_length = sum(audio_lengths) + SILENCE_PADDING * len(audio_lengths)
     for sentence, length in zip(raw_sentences, audio_lengths):
         short_sentence = sentence[:50] + "..." if len(sentence) > 50 else sentence
         logger.debug(f"  {short_sentence}: {length:.2f}s")
