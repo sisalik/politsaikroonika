@@ -65,6 +65,13 @@ def _parse_args():
         "-k", "--keep_intermediate", action="store_true", help="Keep intermediate files"
     )
     parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="Logging verbosity (-v, -vv, etc)",
+    )
+    parser.add_argument(
         "-w",
         "--when_done",
         type=str,
@@ -79,9 +86,23 @@ def _parse_args():
     )
     args = parser.parse_args()
     # Allow "--avoid topic1,topic2" syntax as well as "--avoid topic1 --avoid topic2"
-    if len(args.avoid) == 1 and "," in args.avoid[0]:
+    if args.avoid and len(args.avoid) == 1 and "," in args.avoid[0]:
         args.avoid = args.avoid[0].split(",")
     return args
+
+
+def _setup_logging(verbosity):
+    """Set up logging with the specified verbosity level."""
+    logger.remove()
+    verbosity_to_level = {
+        0: "WARNING",  # No -v argument
+        1: "INFO",  # -v
+        2: "DEBUG",  # -vv
+    }
+    try:
+        logger.add(sys.stderr, level=verbosity_to_level[verbosity])
+    except KeyError:
+        raise ValueError(f"Invalid verbosity level: {verbosity}")
 
 
 def _prompt_openai_model(
@@ -798,6 +819,7 @@ def make_episode(ep_dir, interactive=False, avoid_topics=None, no_openai=False):
 
 def make_episodes(args):
     """Make episodes."""
+    _setup_logging(args.verbose)
     # Find the last episode index from the output directory
     episode_dirs = sorted(Path("output").glob("ep_*"))
     if episode_dirs:
