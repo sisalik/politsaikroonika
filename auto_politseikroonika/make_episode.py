@@ -33,7 +33,8 @@ REPORTER_PROMPT = (
 )
 # Shared negative video generation prompt
 NEGATIVE_PROMPT = (
-    "camera pan, moving camera, dynamic shot, text, watermark, copyright, blurry"
+    "camera pan, moving camera, dynamic shot, text, watermark, copyright, blurry, "
+    "blood, gore, wounds"
 )
 # Append style parameters to each video generation prompt
 VIDEO_STYLE_EXTRA = ", 90s, russia, eastern europe"
@@ -312,6 +313,7 @@ Generate titles for an Estonian police and crime news TV segment. There should b
     title_candidates_str = "\n".join(
         f"{i + 1}. {title}" for i, title in enumerate(title_candidates)
     )
+    logger.info(f"Title candidates:\n{title_candidates_str}")
     prompt = f"""
 Which one of these sentences in Estonian stands out as the one you would least expect to see as a news headline? Pick the most unexpected and weird one. Only reply with the number.
 {title_candidates_str}"""
@@ -350,22 +352,22 @@ Generate the script for an Estonian police and crime news TV segment. The segmen
 
 "{summary}"
 
-Constraints are listed below, in no particular order. Do not follow these as plot points in chronological order; use them as guidance throughout the script, in random order.
+Expand the story of the summary above and follow these constraints below in no particular order:
 - The word count should be up to 120 words
 - The script is intended to be read out by the news reporter for a made-up TV channel
 - Start by addressing the TV channel viewers and stating the location and time of the event
-- Describe the tragic events and casualties at length in a detailed manner
-- Discuss the motives of the criminal
+- Focus on describing the tragic events and casualties at length in a detailed manner, adding extra details and nuance
+- Discuss why the crime occurred, or the motives of the criminal
 - Use poetic and edgy, yet graphic language
 - Use old-fashioned metaphors and proverbs
 - The criminal event should be rather strange and oddly specific
 - Only write about a single criminal event, not several
 - Speak somewhat demeaningly of the victims
-- Briefly describe the actions of the police officers
+- Briefly describe the actions of the police officers which may or may not have been successful
 - End with one sentence with a thought-provoking statement that is not obvious or cliché, e.g. crime is bad
 - Do not address the viewers again or sign off at the end of the segment"""
-    # Limit the number of tokens to yield roughly 120 words or 50 seconds of audio
-    script = _prompt_openai_model(prompt.strip(), max_tokens=360)
+    # Limit the number of tokens to yield roughly 130 words or 55 seconds of audio
+    script = _prompt_openai_model(prompt.strip(), max_tokens=390)
     # Sometimes the entire response is in quotes, so remove them
     if script.startswith('"') and script.endswith('"'):
         script = script[1:-1]
@@ -518,21 +520,21 @@ Generate captions for a photographic storyboard for an Estonian police and crime
 There should be 5 captions in total. The captions should:
 - be written in very terse, news style English, with descriptive keywords and adjectives
 - describe photographic stills of the news segment
-- focus on the main characters and criminal events
+- focus on the main characters and criminal events, not the police officers
 - be one per line, focussed on a single subject and avoiding too many different concepts
+- avoid these keywords: aerial view, close-up, crowd, blood, gore, wounds
 - avoid concepts that are too abstract or general to be visualized
 - avoid specific geographic locations
 - include detailed information about the subject (color, shape, texture, size), background and image style
 - be formatted as a comma-separated list of key words and phrases, omitting verbs
 - be in chronological order to form a coherent story
-- avoid these keywords: aerial view, close-up, crowd
 
 Examples:
 - man wearing a hoodie, criminal, holding a gun, threatening, pointing at the camera
 - car chase, city street, police cars, sirens, flashing lights
 - green rusty door, small hidden opening, people entering, flashlight
 - interior of abandoned building, large vats and pipes, various bottles and containers, cobwebs, dark, ambient lighting
-- factory exterior, group of onlookers, police officers, police cars"""
+- factory exterior, group of onlookers, police cars"""
     response = _prompt_openai_model(prompt.strip())
     video_prompts = (line.strip() for line in response.splitlines() if line.strip())
     # Remove bullet points and numbering in case there is any
