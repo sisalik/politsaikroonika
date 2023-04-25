@@ -185,20 +185,28 @@ def _interactive_wrapper(interactive, output_name, func, args):
     """Run a function, optionally prompting the user for input."""
     if not interactive:
         return func(*args)
-    output_verified = False
-    while not output_verified:
+    output_accepted = False
+    # Loop until the user accepts the output
+    while not output_accepted:
         output = func(*args)
+        # Assemble an input prompt based on the output type
+        if isinstance(output, list) or isinstance(output, tuple):
+            input_prompt_extra = " (separated by semicolons)"
+        else:
+            input_prompt_extra = ""
+        input_prompt = (
+            f"  Y: accept this {output_name}\n"
+            f"  N: regenerate the {output_name}\n"
+            "  Q: quit\n"
+            f"  Any other text to override the {output_name}{input_prompt_extra}: "
+        )
+        # Loop until the user provides valid input
         while True:
             print(f"Generated {output_name}: {output}")
-            response = input(
-                f"  Y: accept this {output_name}\n"
-                f"  N: regenerate the {output_name}\n"
-                "  Q: quit\n"
-                f"  Any other text to override the {output_name}: "
-            ).strip()
+            response = input(input_prompt).strip()
             if response.lower() == "y":
                 logger.debug(f"User selected to accept the {output_name}")
-                output_verified = True
+                output_accepted = True
                 break
             elif response.lower() == "n":
                 logger.debug(f"User selected to re-generate the {output_name}")
@@ -211,8 +219,11 @@ def _interactive_wrapper(interactive, output_name, func, args):
                 continue
             else:
                 logger.debug(f"User selected to override the {output_name}")
-                output = response
-                output_verified = True
+                if isinstance(output, list) or isinstance(output, tuple):
+                    output = [element.strip() for element in response.split(";")]
+                else:
+                    output = response
+                output_accepted = True
                 break
     return output
 
@@ -778,7 +789,9 @@ def make_episode(ep_dir, interactive=False, avoid_topics=None, no_openai=False):
     logger.info(f"Total audio length: {total_audio_length:.2f}s")
 
     logger.info("Generating video prompts...")
-    prompts = gen_video_prompts(summary, no_openai)
+    prompts = _interactive_wrapper(
+        interactive, "video prompts", gen_video_prompts, (summary, no_openai)
+    )
     prompts, prompt_lenghts = distribute_prompts(prompts, audio_lengths)
     for prompt, length in zip(prompts, prompt_lenghts):
         short_prompt = prompt[:50] + "..." if len(prompt) > 50 else prompt
