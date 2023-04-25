@@ -710,9 +710,10 @@ def merge_video_audio_subtitles(video_dir, audio_file, subtitles_file):
 def prepend_intro_and_final_render(input_file, title):
     """Prepend the intro and final render the video file."""
     episode_dir = input_file.parent.parent
-    # Include the episode title in the output file name
+    # Include the episode title in the output file name, removing punctuation
+    safe_title = re.sub(r"[\.,\"'?!]", "", title).replace(" ", ".")
     output_file = (
-        episode_dir / f"{episode_dir.name}_{title.lower().replace(' ', '.')}.mp4"
+        episode_dir / f"{episode_dir.name}_{safe_title}.mp4"
     )
     intro_file = Path("resources/intro.mp4")
     subprocess.run(
