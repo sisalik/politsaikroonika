@@ -4,6 +4,3 @@
 [submodule "Voice-Cloning-App"]
 	path = Voice-Cloning-App
 	url = https://github.com/BenAAndrew/Voice-Cloning-App.git
-[submodule "sd-webui-text2video"]
-	path = sd-webui-text2video
-	url = https://github.com/deforum-art/sd-webui-text2video.git

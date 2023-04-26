@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 from tts_preprocess_et.convert import convert_sentence
 from auto_politseikroonika.google_drive import FolderUploader
+from auto_politseikroonika.video_synthesis import VideoGenPipeline
 
 PYTHON_VENVS = {
     "Voice-Cloning-App": Path("Voice-Cloning-App/.venv/Scripts/python.exe"),
@@ -37,7 +38,7 @@ NEGATIVE_PROMPT = (
     "blood, gore, wounds"
 )
 # Append style parameters to each video generation prompt
-VIDEO_STYLE_EXTRA = ", 90s, russia, eastern europe"
+VIDEO_STYLE_EXTRA = ", russia, eastern europe"
 # Output video frames per second (after 3x interpolation)
 VIDEO_FPS = 8
 # Minimum number of frames to generate for a video (otherwise the video is just noise)
@@ -575,31 +576,25 @@ def distribute_prompts(prompts, audio_lengths):
 
 def gen_video_clips(prompts, lengths, ep_dir):
     """Generate video clips using the prompts and lengths."""
-    dirs = [
-        # Use absolute paths to avoid problems with relative paths in the venv
-        (ep_dir / f"clips/clip_{i+1:02d}").resolve()
-        for i in range(len(prompts))
-    ]
-    args = []
-    for prompt, length, outdir in zip(prompts, lengths, dirs):
-        args.extend(["--prompt", prompt, "--frames", str(length), "--outdir", outdir])
-
-    with _run_in_venv_and_monitor_output(
-        "sd-webui-text2video",
-        Path("scripts/text2vid_cli.py"),
-        "--n_prompt",
-        NEGATIVE_PROMPT,
-        "--cfg_scale",
-        "10",
-        *args,
-    ) as proc:
-        lenghts_iter = iter(lengths)
-        with tqdm(total=sum(lengths), unit="frame") as pbar:
-            for line in proc.stdout:
-                # logger.debug(line)
-                if line.startswith("t2v complete"):
-                    pbar.update(next(lenghts_iter))
-    return dirs
+    # Custom formatting for tqdm to only show 2 decimal places
+    r_bar_custom = "| {n:.2f}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]"
+    with tqdm(
+        total=sum(lengths), unit="frame", bar_format="{l_bar}{bar}" + r_bar_custom
+    ) as pbar, VideoGenPipeline(callback=pbar.update) as pipeline:
+        # Add video generation tasks to the pipeline
+        for idx, (prompt, length) in enumerate(zip(prompts, lengths)):
+            out_path = (ep_dir / f"clips/clip_{idx+1:02d}").resolve()
+            pipeline.push(
+                prompt=prompt,
+                negative_prompt=NEGATIVE_PROMPT,
+                num_frames=length,
+                num_inference_steps=25,
+                guidance_scale=10.0,
+                out_path=out_path,
+            )
+        # Process the entire pipeline in order
+        out_paths = pipeline.process()
+    return out_paths
 
 
 def enhance_video_clips(clips_dirs):
@@ -714,9 +709,7 @@ def prepend_intro_and_final_render(input_file, title):
     episode_dir = input_file.parent.parent
     # Include the episode title in the output file name, removing punctuation
     safe_title = re.sub(r"[\.,\"'?!]", "", title).replace(" ", ".")
-    output_file = (
-        episode_dir / f"{episode_dir.name}_{safe_title}.mp4"
-    )
+    output_file = episode_dir / f"{episode_dir.name}_{safe_title}.mp4"
     intro_file = Path("resources/intro.mp4")
     subprocess.run(
         [

@@ -16,11 +16,17 @@ tqdm = "^4.65.0"
 openai = "^0.27.4"
 toml = "^0.10.2"
 pydrive2 = "^1.15.3"
+diffusers = {git = "https://github.com/huggingface/diffusers"}
+transformers = "^4.28.1"
+accelerate = "^0.18.0"
+torch = {url = "https://download.pytorch.org/whl/cu117/torch-2.0.0%2Bcu117-cp39-cp39-win_amd64.whl"}
+opencv-python = "^4.7.0.72"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.3.0"
 isort = "^5.12.0"
 pytest = "^7.2.2"
+
 
 [build-system]
 requires = ["poetry-core"]
