@@ -641,13 +641,7 @@ def distribute_prompts(prompts, audio_lengths):
 def gen_video_clips(prompts, lengths, ep_dir):
     """Generate video clips using the prompts and lengths."""
     # Custom formatting for tqdm to only show 2 decimal places
-    r_bar_custom = "| {n:.2f}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]"
-    with tqdm(
-        total=sum(lengths), unit="frame", bar_format="{l_bar}{bar}" + r_bar_custom
-    ) as pbar, VideoGenPipeline(
-        model=r"C:\Users\Siim\.cache\huggingface\hub\models--damo-vilab--text-to-video-ms-1.7b\snapshots\97251f478de2ca46f67bcf4b3fc18efca5502e7e",
-        callback=pbar.update,
-    ) as pipeline:
+    with tqdm(unit="frame") as pbar, VideoGenPipeline(progress_bar=pbar) as pipeline:
         # Add video generation tasks to the pipeline
         for idx, (prompt, length) in enumerate(zip(prompts, lengths)):
             out_path = (ep_dir / f"clips/clip_{idx+1:02d}").resolve()
