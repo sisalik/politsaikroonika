@@ -2,8 +2,8 @@ import re
 
 import pytest
 
-from auto_politseikroonika.language_consts import EST_ALPHABET_REGEX
-from auto_politseikroonika.split_audio import (
+from politsaikroonika.language_consts import EST_ALPHABET_REGEX
+from politsaikroonika.split_audio import (
     fix_word_timestamps,
     fix_split_or_merged_words,
     make_sentences,

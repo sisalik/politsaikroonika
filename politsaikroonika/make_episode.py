@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -17,8 +18,8 @@ from loguru import logger
 from tqdm import tqdm
 
 from tts_preprocess_et.convert import convert_sentence
-from auto_politseikroonika.google_drive import FolderUploader
-from auto_politseikroonika.video_synthesis import VideoGenPipeline
+from politsaikroonika.google_drive import FolderUploader
+from politsaikroonika.video_synthesis import VideoGenPipeline
 
 PYTHON_VENVS = {
     "Voice-Cloning-App": Path("Voice-Cloning-App/.venv/Scripts/python.exe"),
@@ -29,8 +30,8 @@ SILENCE_PADDING = 0.3
 # Video generation prompt for the first and last shots with the reporter
 REPORTER_PROMPT = (
     "norwegian adult male reporter talking into microphone, (tony hawk hair:0.9), "
-    "90s black leather jacket, portrait shot, tripod, looking at camera, "
-    "standing on 80s russian city street"
+    "90s black leather jacket, portrait shot, looking at camera, standing on 80s "
+    "russian city street"
 )
 # Shared negative video generation prompt
 NEGATIVE_PROMPT = (
@@ -39,18 +40,20 @@ NEGATIVE_PROMPT = (
 )
 # Append style parameters to each video generation prompt
 VIDEO_STYLE_EXTRA = ", russia, eastern europe"
-# Output video frames per second (after 3x interpolation)
+# Width and height of the generated video (in pixels)
+VIDEO_SIZE = 256
+# Generated video frames per second equivalent (after below interpolation)
 VIDEO_FPS = 8
+# Interpolation factor (slow-mo) for video enhancement
+VIDEO_INTERPOLATION_FACTOR = 3
 # Minimum number of frames to generate for a video (otherwise the video is just noise)
 VIDEO_FRAMES_MIN = 16
 # Maximum number of frames to generate for a video (otherwise you run out of VRAM)
-VIDEO_FRAMES_MAX = 48
+VIDEO_FRAMES_MAX = 36
 # OpenAI model to use for text generation
 OPENAI_MODEL = "gpt-3.5-turbo"
-# Topaz Video AI model path
-TOPAZ_MODEL_DIR = Path("C:/ProgramData/Topaz Labs LLC/Topaz Video AI/models")
-# Topaz Video AI ffmpeg executable path
-TOPAZ_FFMPEG = Path("C:/Program Files/Topaz Labs LLC/Topaz Video AI/ffmpeg.exe")
+# Default OpenAI temperature parameter (0-1). Higher values result in more randomness.
+OPENAI_DEFAULT_TEMPERATURE = 0.8
 
 
 def _parse_args():
@@ -90,6 +93,9 @@ def _parse_args():
     # Allow "--avoid topic1,topic2" syntax as well as "--avoid topic1 --avoid topic2"
     if args.avoid and len(args.avoid) == 1 and "," in args.avoid[0]:
         args.avoid = args.avoid[0].split(",")
+    # --interactive cannot be used together with --no-openai
+    if args.interactive and args.no_openai:
+        parser.error("--interactive cannot be used together with --no-openai")
     return args
 
 
@@ -108,7 +114,11 @@ def _setup_logging(verbosity):
 
 
 def _prompt_openai_model(
-    prompt, max_tokens=256, temperature=0.7, allow_truncated=False, max_attempts=10
+    prompt,
+    max_tokens=256,
+    temperature=OPENAI_DEFAULT_TEMPERATURE,
+    allow_truncated=False,
+    max_attempts=10,
 ):
     """Initialize OpenAI API and make a request."""
     openai.api_key = os.environ["OPENAI_API_KEY"]
@@ -161,6 +171,18 @@ def _pc_sleep():
     subprocess.run("rundll32.exe powrprof.dll,SetSuspendState 0,1,0".split())
 
 
+def _monitor_dir_file_count(dir, target_count, callback):
+    """Monitor the number of files in a directory."""
+    prev_count = 0
+    while True:
+        file_count = len(list(dir.iterdir()))
+        callback(file_count - prev_count)
+        if file_count >= target_count:
+            break
+        prev_count = file_count
+        time.sleep(1)
+
+
 def _get_git_revision():
     """Get the current git revision."""
     output = subprocess.run(
@@ -181,6 +203,26 @@ def _get_media_file_duration(media_file):
         text=True,
     )
     return float(output.stdout)
+
+
+def _ask_user_for_input(item_name, default=None, item_type=str):
+    """Prompt the user for input."""
+    prompt = f"Enter {item_name}"
+    if item_type in (list, tuple):
+        prompt += " (separated by semicolons)"
+    if default is not None:
+        prompt += f" (default: {default})"
+    prompt += ": "
+    while True:
+        user_input = input(prompt)
+        if user_input == "" and default is not None:
+            return default
+        elif user_input != "":
+            user_input = user_input.strip()
+            if item_type in (list, tuple):
+                user_input = user_input.split(";")
+                user_input = [item.strip() for item in user_input]
+            return user_input
 
 
 def _interactive_wrapper(interactive, output_name, func, args):
@@ -275,7 +317,11 @@ def _record_metadata(file, metadata):
 def gen_title(avoid_topics=None, no_openai=False):
     """Generate a title for the episode."""
     if no_openai:
-        return "Vanaproua tõstis oma korteris üles kasvatatud krokodilli politsei sekkumiseta"
+        return _ask_user_for_input(
+            "title",
+            "Vanaproua tõstis oma korteris üles kasvatatud krokodilli politsei "
+            "sekkumiseta",
+        )
     if avoid_topics:
         avoid_prompt = (
             f"Avoid mentioning the following topics: {', '.join(avoid_topics)}. "
@@ -336,7 +382,14 @@ Which one of these sentences in Estonian stands out as the one you would least e
 def gen_summary(title, avoid_topics=None, no_openai=False):
     """Generate a summary for the episode."""
     if no_openai:
-        return "An elderly woman in Estonia raised a crocodile in her apartment without any police intervention. The woman claimed the crocodile was her late husband's pet and she couldn't bear to part with it. Neighbors reported the animal to authorities, but the woman was allowed to keep it after proving she could care for it properly."
+        return _ask_user_for_input(
+            "summary",
+            "An elderly woman in Estonia raised a crocodile in her apartment without "
+            "any police intervention. The woman claimed the crocodile was her late "
+            "husband's pet and she couldn't bear to part with it. Neighbors reported "
+            "the animal to authorities, but the woman was allowed to keep it after "
+            "proving she could care for it properly.",
+        )
     prompt = f"""
 Imagine there is a crime news article in Estonian titled "{title}". Can you make up a short 3-sentence summary of the events that took place, including a bizarre reason/explanation/motive?"""
     if avoid_topics:
@@ -347,7 +400,17 @@ Imagine there is a crime news article in Estonian titled "{title}". Can you make
 def gen_script(summary, no_openai=False):
     """Generate a script for the episode."""
     if no_openai:
-        return "Tere õhtust ja tere tulemast meie uudistesse! Täna räägime teile ühest kummalisest juhtumist Eesti linnas. Nimelt avastasid naabrid, et üks vanem naine kasvatas oma korteris krokodilli! Naine väitis, et tegemist on tema hiljuti surnud abikaasa lemmikloomaga ning ta ei taha sellest loobuda. Pärast politsei sekkumist suutis naine tõestada, et ta on looma eest hoolitsemiseks piisavalt pädev ning krokodill lubati tema juures edasi elada. Kuidas see võimalik oli? Kas politsei tegi õigesti? Kas on turvaline elada krokodilli kõrval? Küsimused, mis jätavad meid mõtlema."
+        return _ask_user_for_input(
+            "script",
+            "Tere õhtust ja tere tulemast meie uudistesse! Täna räägime teile ühest "
+            "kummalisest juhtumist Eesti linnas. Nimelt avastasid naabrid, et üks "
+            "vanem naine kasvatas oma korteris krokodilli! Naine väitis, et tegemist "
+            "on tema hiljuti surnud abikaasa lemmikloomaga ning ta ei taha sellest "
+            "loobuda. Pärast politsei sekkumist suutis naine tõestada, et ta on looma "
+            "eest hoolitsemiseks piisavalt pädev ning krokodill lubati tema juures "
+            "edasi elada. Kuidas see võimalik oli? Kas politsei tegi õigesti? Kas on "
+            "turvaline elada krokodilli kõrval? Küsimused, mis jätavad meid mõtlema.",
+        )
     prompt = f"""
 Generate the script for an Estonian police and crime news TV segment. The segment is written in the Estonian language and its short summary is as follows:
 
@@ -355,14 +418,10 @@ Generate the script for an Estonian police and crime news TV segment. The segmen
 
 Expand the story of the summary above and follow these constraints below in no particular order:
 - The word count should be up to 120 words
-- The script is intended to be read out by the news reporter for a made-up TV channel
-- Start by addressing the TV channel viewers and stating the location and time of the event
-- Focus on describing the tragic events and casualties at length in a detailed manner, adding extra details and nuance
+- Start by addressing the viewers of a made-up TV channel and stating the location and time of the event
+- Focus on describing the tragic events and casualties at length in a detailed manner, inventing extra details and adding nuance
 - Discuss why the crime occurred, or the motives of the criminal
-- Use poetic and edgy, yet graphic language
-- Use old-fashioned metaphors and proverbs
-- The criminal event should be rather strange and oddly specific
-- Only write about a single criminal event, not several
+- Use poetic and edgy, yet graphic language with old-fashioned metaphors and proverbs
 - Speak somewhat demeaningly of the victims
 - Briefly describe the actions of the police officers which may or may not have been successful
 - End with one sentence with a thought-provoking statement that is not obvious or cliché, e.g. crime is bad
@@ -512,22 +571,27 @@ def gen_video_prompts(summary, no_openai=False):
             "woman walking the crocodile on a leash in a nearby park, green grass, trees, passerby staring in disbelief",
         ]
         video_prompts = [prompt + VIDEO_STYLE_EXTRA for prompt in video_prompts]
-        return [REPORTER_PROMPT] + video_prompts + [REPORTER_PROMPT]
+        return _ask_user_for_input(
+            "video prompts",
+            "; ".join([REPORTER_PROMPT] + video_prompts + [REPORTER_PROMPT]),
+            item_type=list,
+        )
     prompt = f"""
-Generate captions for a photographic storyboard for an Estonian police and crime news TV segment. The segment is written in the Estonian language and its short summary is as follows:
+Generate captions for a photographic storyboard for a police and crime news TV segment. Its short summary is as follows:
 
 "{summary}"
 
 There should be 5 captions in total. The captions should:
-- be written in very terse, news style English, with descriptive keywords and adjectives
+- be written in terse, simple, basic, easy-to-understand news style English, with lots of descriptive keywords and adjectives
 - describe photographic stills of the news segment
+- avoid mentioning concepts that are too abstract or general to be visualized
+- start each caption with a simple words; add simple synonyms for complicated/rare/archaic words
 - focus on the main characters and criminal events, not the police officers
 - be one per line, focussed on a single subject and avoiding too many different concepts
 - avoid these keywords: aerial view, close-up, crowd, blood, gore, wounds
-- avoid concepts that are too abstract or general to be visualized
-- avoid specific geographic locations
+- avoid mentioning specific geographic locations
 - include detailed information about the subject (color, shape, texture, size), background and image style
-- be formatted as a comma-separated list of key words and phrases, omitting verbs
+- be formatted as a comma-separated list of key words and phrases
 - be in chronological order to form a coherent story
 
 Examples:
@@ -580,7 +644,10 @@ def gen_video_clips(prompts, lengths, ep_dir):
     r_bar_custom = "| {n:.2f}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]"
     with tqdm(
         total=sum(lengths), unit="frame", bar_format="{l_bar}{bar}" + r_bar_custom
-    ) as pbar, VideoGenPipeline(callback=pbar.update) as pipeline:
+    ) as pbar, VideoGenPipeline(
+        model=r"C:\Users\Siim\.cache\huggingface\hub\models--damo-vilab--text-to-video-ms-1.7b\snapshots\97251f478de2ca46f67bcf4b3fc18efca5502e7e",
+        callback=pbar.update,
+    ) as pipeline:
         # Add video generation tasks to the pipeline
         for idx, (prompt, length) in enumerate(zip(prompts, lengths)):
             out_path = (ep_dir / f"clips/clip_{idx+1:02d}").resolve()
@@ -588,8 +655,10 @@ def gen_video_clips(prompts, lengths, ep_dir):
                 prompt=prompt,
                 negative_prompt=NEGATIVE_PROMPT,
                 num_frames=length,
-                num_inference_steps=25,
-                guidance_scale=10.0,
+                num_inference_steps=40,
+                guidance_scale=9.0,
+                width=VIDEO_SIZE,
+                height=VIDEO_SIZE,
                 out_path=out_path,
             )
         # Process the entire pipeline in order
@@ -597,60 +666,60 @@ def gen_video_clips(prompts, lengths, ep_dir):
     return out_paths
 
 
-def enhance_video_clips(clips_dirs):
+def enhance_video(input_dir):
     """Interpolate and upscale video frames using Topaz Video AI."""
-    # Set Topaz Video AI environment variables
-    os.environ["TVAI_MODEL_DATA_DIR"] = str(TOPAZ_MODEL_DIR)
-    os.environ["TVAI_MODEL_DIR"] = str(TOPAZ_MODEL_DIR)
-    output_dirs = []
-    total_frames = sum(len(list(clip_dir.glob("*.png"))) for clip_dir in clips_dirs)
+    output_dir = input_dir.parent / "enhanced"
+    output_dir.mkdir(exist_ok=True)
+    total_frames = len(list(input_dir.glob("*.png"))) * VIDEO_INTERPOLATION_FACTOR
+    # TODO: Thread this and run two instances of ffmpeg at the same time
     with tqdm(total=total_frames, unit="frame") as pbar:
-        for clip_dir in clips_dirs:
-            input_sequence = clip_dir / "%06d.png"
-            output_sequence = clip_dir / "enhanced" / "%06d.png"
-            output_sequence.parent.mkdir(exist_ok=True)
-            output_dirs.append(output_sequence.parent)
-            # TODO: Thread this and run two instances of ffmpeg at the same time
-            subprocess.run(
-                [
-                    TOPAZ_FFMPEG,
-                    "-nostdin",
-                    "-y",
-                    "-framerate",
-                    "24",
-                    "-start_number",
-                    "0",
-                    "-i",
-                    input_sequence,
-                    "-sws_flags",
-                    "spline+accurate_rnd+full_chroma_int",
-                    "-color_trc",
-                    "2",
-                    "-colorspace",
-                    "0",
-                    "-color_primaries",
-                    "2",
-                    "-filter_complex",
-                    "tvai_fi=model=apo-8:slowmo=3:rdt=0.01:device=0:vram=1:instances=1,tvai_up=model=thd-3:scale=0:w=1024:h=1024:noise=0:blur=0:compression=0:device=0:vram=1:instances=1,scale=w=1024:h=1024:flags=lanczos:threads=0",
-                    "-c:v",
-                    "png",
-                    "-pix_fmt",
-                    "rgb24",
-                    "-start_number",
-                    "0",
-                    output_sequence,
-                ],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            pbar.update(len(list(clip_dir.glob("*.png"))))
-    return output_dirs
+        # In order to update the progress bar, monitor the output directory for new
+        # files in a separate thread
+        monitor_thread = threading.Thread(
+            target=_monitor_dir_file_count,
+            args=(output_dir, total_frames, pbar.update),
+        )
+        monitor_thread.start()
+        subprocess.run(
+            [
+                os.getenv("TVAI_FFMPEG"),
+                "-nostdin",
+                "-y",
+                "-framerate",
+                "24",
+                "-start_number",
+                "0",
+                "-i",
+                input_dir / "%06d.png",
+                "-sws_flags",
+                "spline+accurate_rnd+full_chroma_int",
+                "-color_trc",
+                "2",
+                "-colorspace",
+                "0",
+                "-color_primaries",
+                "2",
+                "-filter_complex",
+                "tvai_fi=model=apo-8:slowmo=3:rdt=0.01:device=0:vram=1:instances=0,tvai_up=model=thd-3:scale=0:w=1024:h=1024:noise=0:blur=0:compression=0:device=0:vram=1:instances=0,scale=w=1024:h=1024:flags=lanczos:threads=0",
+                "-c:v",
+                "png",
+                "-pix_fmt",
+                "rgb24",
+                "-start_number",
+                "0",
+                output_dir / "%06d.png",
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        monitor_thread.join()
+    return output_dir
 
 
 def merge_video_clips(clip_dirs):
     """Merge the video clips (image sequences) into a single video."""
-    output_dir = clip_dirs[0].parent.parent / "merged"
+    output_dir = clip_dirs[0].parent / "merged"
     output_dir.mkdir(exist_ok=True)
 
     frame_idx = 0
@@ -796,13 +865,13 @@ def make_episode(ep_dir, interactive=False, avoid_topics=None, no_openai=False):
     clip_dirs = gen_video_clips(prompts, prompt_lenghts, ep_dir)
 
     logger.info("Enhancing video clips...")
-    enhanced_clip_dirs = enhance_video_clips(clip_dirs)
-    merged_video_dir = merge_video_clips(enhanced_clip_dirs)
+    merged_video_dir = merge_video_clips(clip_dirs)
+    enhanced_video_dir = enhance_video(merged_video_dir)
 
     logger.info("Merging audio and video and subtitles...")
     subtitles_file = create_subtitles(raw_sentences, audio_lengths, ep_dir)
     merged_video_file = merge_video_audio_subtitles(
-        merged_video_dir, merged_audio_file, subtitles_file
+        enhanced_video_dir, merged_audio_file, subtitles_file
     )
     final_video_file = prepend_intro_and_final_render(merged_video_file, title)
 

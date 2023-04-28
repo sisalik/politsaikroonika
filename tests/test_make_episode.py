@@ -1,7 +1,7 @@
 import math
 import pytest
 
-from auto_politseikroonika.make_episode import _seconds_to_frame_splits
+from politsaikroonika.make_episode import _seconds_to_frame_splits
 
 
 @pytest.mark.parametrize(

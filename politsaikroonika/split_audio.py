@@ -12,7 +12,7 @@ from estnltk import Text
 from loguru import logger
 from tqdm import tqdm
 
-from auto_politseikroonika.language_consts import EST_ALPHABET_REGEX, WordClass
+from politsaikroonika.language_consts import EST_ALPHABET_REGEX, WordClass
 from tts_preprocess_et.convert import convert_sentence
 
 # The speaker IDs that are used in the transcript JSON file to tag the speech we are

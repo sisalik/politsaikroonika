@@ -6,6 +6,7 @@ import cv2
 import diffusers.utils
 import torch
 from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
+from diffusers.models.attention_processor import AttnProcessor2_0
 
 
 class OutputFormat(enum.Enum):
@@ -45,6 +46,8 @@ class VideoGenPipeline:
             self._pipe.enable_model_cpu_offload()  # Medium VRAM savings
         self._pipe.enable_vae_slicing()
         self._pipe.enable_vae_tiling()
+        self._pipe.unet.set_attn_processor(AttnProcessor2_0())
+        # self._pipe.unet = torch.compile(self._pipe.unet)
 
     def push(self, **kwargs):
         """Push a new video generation job to the queue."""
