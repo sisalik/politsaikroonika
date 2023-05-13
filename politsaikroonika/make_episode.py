@@ -1,6 +1,4 @@
 import argparse
-import contextlib
-from dataclasses import dataclass
 import math
 import os
 import random
@@ -10,23 +8,20 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Union
 
 import openai
-import toml
 from estnltk import Text
 from loguru import logger
 from tqdm import tqdm
 
-from tts_preprocess_et.convert import convert_sentence
+import politsaikroonika.utils as utils
 from politsaikroonika.google_drive import FolderUploader
 from politsaikroonika.video_synthesis import VideoGenPipeline
+from tts_preprocess_et.convert import convert_sentence
 
-PYTHON_VENVS = {
-    "Voice-Cloning-App": Path("Voice-Cloning-App/.venv/Scripts/python.exe"),
-    "sd-webui-text2video": Path("sd-webui-text2video/.venv/Scripts/python.exe"),
-}
 # Silence between sentences in seconds
 SILENCE_PADDING = 0.3
 # Video generation prompt for the first and last shots with the reporter
@@ -208,63 +203,6 @@ def _prompt_openai_model_with_context(
     raise Exception("OpenAI API failed to return a valid response")
 
 
-@contextlib.contextmanager
-def _run_in_venv_and_monitor_output(venv, *commands):
-    """Run commands in a specified Python virtual environment and monitor output."""
-    assert Path(venv).is_dir(), f"Invalid venv path: {venv}"
-    with subprocess.Popen(
-        [PYTHON_VENVS[venv], *commands],
-        cwd=venv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=1,
-        universal_newlines=True,
-    ) as proc:
-        yield proc
-
-    if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, proc.args)
-
-
-def _pc_sleep():
-    """Put the computer to sleep."""
-    subprocess.run("rundll32.exe powrprof.dll,SetSuspendState 0,1,0".split())
-
-
-def _monitor_dir_file_count(dir, target_count, callback):
-    """Monitor the number of files in a directory."""
-    prev_count = 0
-    while True:
-        file_count = len(list(dir.iterdir()))
-        callback(file_count - prev_count)
-        if file_count >= target_count:
-            break
-        prev_count = file_count
-        time.sleep(1)
-
-
-def _get_git_revision():
-    """Get the current git revision."""
-    output = subprocess.run(
-        "git describe --tags --always --dirty=-dev".split(),
-        capture_output=True,
-        text=True,
-    )
-    return output.stdout.strip()
-
-
-def _get_media_file_duration(media_file):
-    """Get audio/video file duration in seconds."""
-    output = subprocess.run(
-        "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1".split()
-        + [str(media_file)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return float(output.stdout)
-
-
 def _ask_user_for_input(item_name, default=None, item_type=str):
     """Prompt the user for input."""
     prompt = f"Enter {item_name}"
@@ -437,18 +375,6 @@ def _seconds_to_frame_splits(
         return splits
     else:
         return [frames]
-
-
-def _record_metadata(file, metadata):
-    """Append metadata to a TOML file."""
-    if Path(file).is_file():
-        with open(file) as f:
-            data = toml.load(f)
-    else:
-        data = {}
-    data.update(metadata)
-    with open(file, "w") as f:
-        toml.dump(data, f)
 
 
 def _word_count(text):
@@ -639,7 +565,7 @@ def gen_audio(sentences, ep_dir):
     for sentence, filename in zip(sentences, filenames):
         args.extend(["-t", sentence, "-a", filename])
 
-    with _run_in_venv_and_monitor_output(
+    with utils.run_in_venv_and_monitor_output(
         "Voice-Cloning-App",
         Path("synthesis/synthesize.py"),
         "--model_path",
@@ -847,7 +773,7 @@ def enhance_video(input_dir):
         # In order to update the progress bar, monitor the output directory for new
         # files in a separate thread
         monitor_thread = threading.Thread(
-            target=_monitor_dir_file_count,
+            target=utils.monitor_dir_file_count,
             args=(output_dir, total_frames, pbar.update),
         )
         monitor_thread.start()
@@ -1024,7 +950,9 @@ def make_episode(
 
     logger.info(f"Generating audio for {len(raw_sentences)} sentences...")
     audio_files = gen_audio(converted_sentences, ep_dir)
-    audio_lengths = [_get_media_file_duration(filename) for filename in audio_files]
+    audio_lengths = [
+        utils.get_media_file_duration(filename) for filename in audio_files
+    ]
     merged_audio_file = merge_audio(audio_files)
     total_audio_length = sum(audio_lengths) + SILENCE_PADDING * len(audio_lengths)
     for sentence, length in zip(raw_sentences, audio_lengths):
@@ -1055,7 +983,7 @@ def make_episode(
 
     process_duration = time.time() - process_start_time
     metadata_file = ep_dir / f"{ep_dir.name}.toml"
-    _record_metadata(
+    utils.record_metadata(
         metadata_file,
         {
             "title": title,
@@ -1063,9 +991,9 @@ def make_episode(
             "script": script,
             "prompts": prompts,
             "audio_duration": total_audio_length,
-            "total_duration": _get_media_file_duration(final_video_file),
+            "total_duration": utils.get_media_file_duration(final_video_file),
             "process_duration": process_duration,
-            "git_commit": _get_git_revision(),
+            "git_commit": utils.get_git_revision(),
         },
     )
     logger.success(f"Episode {ep_dir.name} completed in {process_duration/60:.1f} min")
@@ -1109,7 +1037,7 @@ def make_episodes(args):
             shutil.rmtree(episode_dir / "sentences")
         logger.remove(episode_logger)
     if args.when_done == "sleep":
-        _pc_sleep()
+        utils.pc_sleep()
 
 
 if __name__ == "__main__":
