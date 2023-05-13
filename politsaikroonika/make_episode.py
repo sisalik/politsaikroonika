@@ -57,6 +57,14 @@ VIDEO_FRAMES_MAX_REPORTER = 48
 OPENAI_MODEL = "gpt-3.5-turbo"
 # Default OpenAI temperature parameter (0-1). Higher values result in more randomness.
 OPENAI_DEFAULT_TEMPERATURE = 0.7
+# Social media caption template
+SOCIAL_MEDIA_CAPTION_TEMPLATE = """
+Osa x: {title}
+
+100% AI-genereeritud krimiuudised 🤖👮 uus osa iga päev!
+Tehnoloogiad: GPT-3.5, ModelScope text2video, Tacotron 2 TTS, EstNLTK, ffmpeg, Python
+
+#tehisintellekt #kuritegevus #uudised #politseikroonika #krimi #90ndad #satiir #naljakas #eesti #meem #ai #aiart #crime #news #deepfake #artificialintelligence #satire #funny #chatgpt #stablediffusion"""
 
 
 @dataclass
@@ -543,6 +551,8 @@ def convert_sentences(raw_sentences):
         ("kurjategija", "kurjadegija"),
         ("kuritegu", "kuridegu"),
         ("kuriteo", "kurideo"),
+        # Foreign words
+        ("ch", "tš"),
     ]
     for raw in raw_sentences:
         converted = convert_sentence(raw)
@@ -959,6 +969,8 @@ def make_episode(
         short_sentence = sentence[:50] + "..." if len(sentence) > 50 else sentence
         logger.debug(f"  {short_sentence}: {length:.2f}s")
     logger.info(f"Total audio length: {total_audio_length:.2f}s")
+    if total_audio_length > AUDIO_LENGTH_MAX:
+        logger.warning(f"Total audio length exceeds maximum of {AUDIO_LENGTH_MAX:.2f}s")
 
     logger.info("Generating video prompts...")
     prompts = gen_video_prompts(summary, no_openai)
@@ -990,6 +1002,7 @@ def make_episode(
             "summary": summary,
             "script": script,
             "prompts": prompts,
+            "caption": SOCIAL_MEDIA_CAPTION_TEMPLATE.format(title=title).strip(),
             "audio_duration": total_audio_length,
             "total_duration": utils.get_media_file_duration(final_video_file),
             "process_duration": process_duration,

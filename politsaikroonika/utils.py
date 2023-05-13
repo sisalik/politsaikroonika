@@ -54,7 +54,7 @@ def record_metadata(file, metadata):
         data = {}
     data.update(metadata)
     with open(file, "w", encoding="utf-8") as f:
-        toml.dump(data, f)
+        toml.dump(data, f, encoder=MultilinePreferringTomlEncoder())
 
 
 @contextlib.contextmanager
@@ -78,3 +78,24 @@ def run_in_venv_and_monitor_output(venv, *commands):
 def pc_sleep():
     """Put the computer to sleep."""
     subprocess.run("rundll32.exe powrprof.dll,SetSuspendState 0,1,0".split())
+
+
+def _dump_str_prefer_multiline(v):
+    """Dump a string to TOML, preferring the multiline string format."""
+    multilines = v.split("\n")
+    if len(multilines) > 1:
+        return toml.encoder.unicode(
+            '"""\n' + v.replace('"""', '\\"""').strip() + '\n"""'
+        )
+    else:
+        return toml.encoder._dump_str(v)
+
+
+class MultilinePreferringTomlEncoder(toml.encoder.TomlEncoder):
+    """A TOML encoder that prefers the multiline string format if possible."""
+
+    def __init__(self, _dict=dict, preserve=False):
+        super(MultilinePreferringTomlEncoder, self).__init__(
+            _dict=dict, preserve=preserve
+        )
+        self.dump_funcs[str] = _dump_str_prefer_multiline
