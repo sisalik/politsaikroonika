@@ -57,7 +57,10 @@ VIDEO_INTERPOLATION_FACTOR = 3
 # Minimum number of frames to generate for a video (otherwise the video is just noise)
 VIDEO_FRAMES_MIN = 16
 # Maximum number of frames to generate for a video (otherwise you run out of VRAM)
-VIDEO_FRAMES_MAX = 36
+VIDEO_FRAMES_MAX = 28
+# The reporter prompt seems to allow longer video to be generated without too many
+# artifacts, so use a separate maximum for it
+VIDEO_FRAMES_MAX_REPORTER = 48
 # OpenAI model to use for text generation
 OPENAI_MODEL = "gpt-3.5-turbo"
 # Default OpenAI temperature parameter (0-1). Higher values result in more randomness.
@@ -394,26 +397,43 @@ def _interactive_select_wrapper(
     return output
 
 
+def _seconds_to_frame_splits(
+    seconds, frames_min=VIDEO_FRAMES_MIN, frames_max=VIDEO_FRAMES_MAX, variability=0.5
+):
+    """Convert seconds to video frames.
+
+    Args:
+        seconds: The duration of the video clip in seconds.
+        variability: The amount of variability allowed in the frame splits. A value
+            of 0.0 means that the splits will be the maximum length possible, while
+            a value of 1.0 means that the splits will be the minimum length possible.
+    """
     if seconds == 0:
         raise ValueError("Cannot convert 0 seconds to frames")
     frames = math.ceil(seconds * VIDEO_FPS)
-    if frames <= VIDEO_FRAMES_MIN:
-        return [VIDEO_FRAMES_MIN]
-    elif frames > VIDEO_FRAMES_MAX:
+    if frames <= frames_min:
+        return [frames_min]
+    elif frames > frames_max:
         # Randomly shuffle the split points, ensuring that each split between
-        # VIDEO_FRAMES_MIN and VIDEO_FRAMES_MAX frames long
+        # frames_min and frames_max frames long
         splits = []
-        n_parts = math.ceil(frames / VIDEO_FRAMES_MAX)
+        avg_duration = frames_max - variability * (frames_max - frames_min)
+        n_parts = math.ceil(frames / avg_duration)
         for i in range(n_parts - 1):
             remaining_frames = frames - sum(splits)
             # Lower bound, assuming that the remaining splits are all at the
             # maximum length
             lower_bound = max(
-                VIDEO_FRAMES_MIN,
-                remaining_frames - VIDEO_FRAMES_MAX * (n_parts - i - 1),
+                frames_min,
+                remaining_frames - frames_max * (n_parts - i - 1),
             )
             # Upper bound, leaving room for a minimum length split at the end
-            upper_bound = min(VIDEO_FRAMES_MAX, remaining_frames - VIDEO_FRAMES_MIN)
+            upper_bound = min(frames_max, remaining_frames - frames_min)
+            # If the lower bound is greater than the upper bound, then there won't be
+            # enough frames left to split another time. Break and add the remaining
+            # frames to the last split.
+            if lower_bound > upper_bound:
+                break
             splits.append(random.randint(lower_bound, upper_bound))
         splits.append(frames - sum(splits))
         random.shuffle(splits)  # For good measure
@@ -762,9 +782,14 @@ Examples:
 
 def distribute_prompts(prompts, audio_lengths):
     """Calculate the length of each prompt based on the audio length."""
-    # Handle opening and closing shots separately
-    opening_length = _seconds_to_frame_splits(audio_lengths[0])[0]
-    closing_length = _seconds_to_frame_splits(audio_lengths[-1])[0]
+    # Handle opening and closing shots separately. Use 0 variability to ensure the clips
+    # are the maximum possible length. Also, use a higher max frame count.
+    opening_length = _seconds_to_frame_splits(
+        audio_lengths[0], frames_max=VIDEO_FRAMES_MAX_REPORTER, variability=0.0
+    )[0]
+    closing_length = _seconds_to_frame_splits(
+        audio_lengths[-1], frames_max=VIDEO_FRAMES_MAX_REPORTER, variability=0.0
+    )[0]
     # Split the remaining duration among the other prompts
     total_audio_length = sum(audio_lengths) + SILENCE_PADDING * len(audio_lengths)
     remaining_length = (
