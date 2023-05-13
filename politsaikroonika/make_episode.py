@@ -819,11 +819,14 @@ def gen_video_clips(prompts, lengths, ep_dir):
         # Add video generation tasks to the pipeline
         for idx, (prompt, length) in enumerate(zip(prompts, lengths)):
             out_path = (ep_dir / f"clips/clip_{idx+1:02d}").resolve()
+            # Calculate the number of inference steps based on the length. The longer
+            # the clip, the less inference steps we need to take to get a good result.
+            steps = max(10, round(25 - (length - 16) * 10 / 8))
             pipeline.push(
                 prompt=prompt,
                 negative_prompt=NEGATIVE_PROMPT,
                 num_frames=length,
-                num_inference_steps=40,
+                num_inference_steps=steps,
                 guidance_scale=9.0,
                 width=VIDEO_SIZE,
                 height=VIDEO_SIZE,
