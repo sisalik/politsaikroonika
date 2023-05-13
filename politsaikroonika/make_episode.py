@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+from dataclasses import dataclass
 import math
 import os
 import random
@@ -10,6 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import List, Union
 
 import openai
 import toml
@@ -40,6 +42,12 @@ NEGATIVE_PROMPT = (
 )
 # Append style parameters to each video generation prompt
 VIDEO_STYLE_EXTRA = ", russia, eastern europe"
+# Minimum number of words in the generated script
+SCRIPT_WORDS_MIN = 90
+# Maximum number of words in the generated script
+SCRIPT_WORDS_MAX = 130
+# Maximum audio length in seconds, for the entire episode to fit within 60 seconds
+AUDIO_LENGTH_MAX = 56.0
 # Width and height of the generated video (in pixels)
 VIDEO_SIZE = 256
 # Generated video frames per second equivalent (after below interpolation)
@@ -53,7 +61,37 @@ VIDEO_FRAMES_MAX = 36
 # OpenAI model to use for text generation
 OPENAI_MODEL = "gpt-3.5-turbo"
 # Default OpenAI temperature parameter (0-1). Higher values result in more randomness.
-OPENAI_DEFAULT_TEMPERATURE = 0.8
+OPENAI_DEFAULT_TEMPERATURE = 0.7
+
+
+@dataclass
+class SystemMessage:
+    """A message from the system to the AI."""
+
+    content: str
+
+    def as_dict(self):
+        return {"role": "system", "content": self.content}
+
+
+@dataclass
+class UserMessage:
+    """A message from the user to the AI."""
+
+    content: str
+
+    def as_dict(self):
+        return {"role": "user", "content": self.content}
+
+
+@dataclass
+class AssistantMessage:
+    """A message from the AI to the user."""
+
+    content: str
+
+    def as_dict(self):
+        return {"role": "assistant", "content": self.content}
 
 
 def _parse_args():
@@ -396,6 +434,14 @@ def _record_metadata(file, metadata):
         toml.dump(data, f)
 
 
+def _word_count(text):
+    """Count the number of words in a string."""
+    text = Text(text)
+    text.analyse("morphology")
+    # Exclude punctuation
+    return len([word for word in text.words if word.partofspeech[0] != "Z"])
+
+
 def gen_titles(include_topics=None, avoid_topics=None, no_openai=False):
     """Generate a list of potential titles for the episode."""
     if no_openai:
@@ -493,10 +539,12 @@ def gen_script(summary, no_openai=False):
     prompt = f"""
 Generate the script for an Estonian police and crime news TV segment. The segment is written in the Estonian language and its short summary is as follows:
 
-"{summary}"
+```
+{summary}
+```
 
 Expand the story of the summary above and follow these constraints below in no particular order:
-- The word count should be up to 120 words
+- The word count should be up to {SCRIPT_WORDS_MAX} words
 - Start by addressing the viewers of a made-up TV channel and stating the location and time of the event
 - Focus on describing the tragic events and casualties at length in a detailed manner, inventing extra details and adding nuance
 - Discuss why the crime occurred, or the motives of the criminal
@@ -505,8 +553,30 @@ Expand the story of the summary above and follow these constraints below in no p
 - Briefly describe the actions of the police officers which may or may not have been successful
 - End with one sentence with a thought-provoking statement that is not obvious or cliché, e.g. crime is bad
 - Do not address the viewers again or sign off at the end of the segment"""
-    # Limit the number of tokens to yield roughly 130 words or 55 seconds of audio
-    script = _prompt_openai_model(prompt.strip(), max_tokens=390)
+    script = _prompt_openai_model(prompt.strip(), max_tokens=800, allow_truncated=True)
+    word_count = _word_count(script)
+    # If the script is too long or short, try to rewrite it by asking the AI to do it,
+    # with the context of the prompt and the script itself
+    rewrite_prompt = f"Shorten the above text a tiny bit to about {SCRIPT_WORDS_MAX} words. Keep the original introduction and focus on describing the criminal events. Write in Estonian."
+    messages = [
+        UserMessage(prompt),
+        AssistantMessage(script),
+        UserMessage(rewrite_prompt),
+    ]
+    for attempt in range(10):
+        word_count = _word_count(script)
+        if SCRIPT_WORDS_MIN <= word_count <= SCRIPT_WORDS_MAX:
+            break
+        logger.info(
+            f"Word count: {word_count}, rewriting the script (attempt {attempt + 1})"
+        )
+        script = _prompt_openai_model_with_context(
+            messages,
+            max_tokens=800,
+            allow_truncated=True,
+        )
+    else:
+        raise Exception("Failed to rewrite the script")
     # Sometimes the entire response is in quotes, so remove them
     if script.startswith('"') and script.endswith('"'):
         script = script[1:-1]
