@@ -92,6 +92,8 @@ class VideoGenPipeline:
             kwargs.pop("seed")  # Don't pass the seed to the pipeline
             # Get the output path from the kwargs but don't pass it to the pipeline
             out_path = kwargs.pop("out_path", f"vid_{time.time():.0f}")
+            if self._output_format == OutputFormat.MP4:
+                out_path += ".mp4"
             video_frames = self._pipe(**kwargs).frames
             frames_processed += len(video_frames)
             # Save the output
