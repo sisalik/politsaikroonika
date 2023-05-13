@@ -67,6 +67,9 @@ def _parse_args():
     )
     parser.add_argument("-a", "--avoid", type=str, action="append", help="Avoid topics")
     parser.add_argument(
+        "-l", "--include", type=str, action="append", help="Include topics"
+    )
+    parser.add_argument(
         "-k", "--keep_intermediate", action="store_true", help="Keep intermediate files"
     )
     parser.add_argument(
@@ -93,6 +96,9 @@ def _parse_args():
     # Allow "--avoid topic1,topic2" syntax as well as "--avoid topic1 --avoid topic2"
     if args.avoid and len(args.avoid) == 1 and "," in args.avoid[0]:
         args.avoid = args.avoid[0].split(",")
+    # Same for "--include"
+    if args.include and len(args.include) == 1 and "," in args.include[0]:
+        args.include = args.include[0].split(",")
     # --interactive cannot be used together with --no-openai
     if args.interactive and args.no_openai:
         parser.error("--interactive cannot be used together with --no-openai")
@@ -120,12 +126,28 @@ def _prompt_openai_model(
     allow_truncated=False,
     max_attempts=10,
 ):
+    return _prompt_openai_model_with_context(
+        messages=[UserMessage(prompt)],
+        max_tokens=max_tokens,
+        temperature=temperature,
+        allow_truncated=allow_truncated,
+        max_attempts=max_attempts,
+    )
+
+
+def _prompt_openai_model_with_context(
+    messages: List[Union[SystemMessage, UserMessage, AssistantMessage]],
+    max_tokens: int = 256,
+    temperature: float = OPENAI_DEFAULT_TEMPERATURE,
+    allow_truncated: bool = False,
+    max_attempts: int = 10,
+):
     """Initialize OpenAI API and make a request."""
     openai.api_key = os.environ["OPENAI_API_KEY"]
     for attempt in range(max_attempts):
         response = openai.ChatCompletion.create(
             model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[m.as_dict() for m in messages],
             max_tokens=max_tokens,
             temperature=temperature,
         )
@@ -225,7 +247,7 @@ def _ask_user_for_input(item_name, default=None, item_type=str):
             return user_input
 
 
-def _interactive_wrapper(interactive, output_name, func, args):
+def _interactive_override_wrapper(interactive, output_name, func, args):
     """Run a function, optionally prompting the user for input."""
     if not interactive:
         return func(*args)
@@ -246,8 +268,9 @@ def _interactive_wrapper(interactive, output_name, func, args):
         )
         # Loop until the user provides valid input
         while True:
-            print(f"Generated {output_name}: {output}")
+            print(f"Generated {output_name}:\n{output}\n")
             response = input(input_prompt).strip()
+            print()
             if response.lower() == "y":
                 logger.debug(f"User selected to accept the {output_name}")
                 output_accepted = True
@@ -272,8 +295,67 @@ def _interactive_wrapper(interactive, output_name, func, args):
     return output
 
 
-def _seconds_to_frame_splits(seconds):
-    """Convert seconds to video frames."""
+def _interactive_select_wrapper(
+    interactive, output_name, gen_func, gen_args, select_func
+):
+    """Run a function to pick an item from a list, allowing the user to override."""
+    if not interactive:
+        return select_func(gen_func(*gen_args))
+    output_accepted = False
+    # Loop until the user accepts the output
+    while not output_accepted:
+        items = gen_func(*gen_args)
+        selection = select_func(items)
+        items_str = ""
+        for i, item in enumerate(items):
+            if i == selection:
+                items_str += f" >{i + 1}. {item}\n"
+            else:
+                items_str += f"  {i + 1}. {item}\n"
+
+        input_prompt = (
+            f"Generated {output_name}s:\n{items_str}\n"
+            f"  Y: accept {output_name} {selection + 1}\n"
+            f"  N: regenerate the {output_name}\n"
+            f"  1-{len(items)}: select a different {output_name}\n"
+            "  Q: quit\n"
+            f"  Any other text to override the {output_name}: "
+        )
+        # Loop until the user provides valid input
+        while True:
+            response = input(input_prompt).strip()
+            print()
+            if response.lower() == "y":
+                logger.debug(f"User selected to accept the {output_name}")
+                output = items[selection]
+                output_accepted = True
+                break
+            elif response.isnumeric():
+                selection = int(response) - 1
+                if selection < 0 or selection > len(items):
+                    logger.error("Invalid selection")
+                    continue
+                logger.debug(f"User selected to re-select the {output_name}")
+                output = items[int(response) - 1]
+                output_accepted = True
+                break
+            elif response.lower() == "n":
+                logger.debug(f"User selected to re-generate the {output_name}")
+                break
+            elif response.lower() == "q":
+                logger.debug("User selected to quit")
+                sys.exit(0)
+            elif not response:
+                logger.error("No input provided")
+                continue
+            else:
+                logger.debug(f"User selected to override the {output_name}")
+                output = response
+                output_accepted = True
+                break
+    return output
+
+
     if seconds == 0:
         raise ValueError("Cannot convert 0 seconds to frames")
     frames = math.ceil(seconds * VIDEO_FPS)
@@ -314,72 +396,53 @@ def _record_metadata(file, metadata):
         toml.dump(data, f)
 
 
-def gen_title(avoid_topics=None, no_openai=False):
-    """Generate a title for the episode."""
+def gen_titles(include_topics=None, avoid_topics=None, no_openai=False):
+    """Generate a list of potential titles for the episode."""
     if no_openai:
         return _ask_user_for_input(
             "title",
-            "Vanaproua tõstis oma korteris üles kasvatatud krokodilli politsei "
-            "sekkumiseta",
+            [
+                "Vanaproua tõstis oma korteris üles kasvatatud krokodilli politsei "
+                "sekkumiseta"
+            ],
+            item_type=list,
         )
+    prompt = f"Act as a TV news editor in Estonia. Your task is to generate a list of 10 headlines for a crime news TV segment. The headlines should be simple declarative sentences written in the Estonian language only - do not include English translations. Use only commas (if necessary) and no other punctuation. Each headline should be no more than 10 words and describe a specific, bizarre yet plausible criminal event that would be of interest to adults with a sense of humor. Examples of types of crimes: antisocial behaviour, protesting, terrorism, forgery,  hacking, fraud, scamming, smuggling, robbery, theft, traffic accident, identity theft, violence etc. The tone should be serious, and you should include who was involved and where it happened. Please avoid covering mundane or too gruesome incidents. To optimize for engagement, ensure the headlines are catchy, click-worthy, and attention-grabbing. Remember to tailor your headlines to the target audience mentioned."
+    if include_topics:
+        prompt += f" Include the following topics in each headline: {', '.join(include_topics)}."
     if avoid_topics:
-        avoid_prompt = (
-            f"Avoid mentioning the following topics: {', '.join(avoid_topics)}. "
-        )
-    else:
-        avoid_prompt = ""
-    prompt = f"""
-Generate titles for an Estonian police and crime news TV segment. There should be 10 titles and each one should be numbered. Each title should be in Estonian and describe an incredibly bizarre, far-fetched, tragic and specific criminal event. It should include who was involved and where it happened. {avoid_prompt}Some examples:
-- Sõbrad vedasid naise üle piiri illegaalselt
-- Kortermaja elanikud avastasid oma trepikojas krokodilli
-- Purjus autojuht sõitis otsa jõuluvanale
-- Kaks koolipoissi üritasid põgeneda politsei eest ujumisbasseini
-- Mees varastas poest 50 pakki kondoomi ja 10 purki vahuveini
-- Naine sõitis põgenedes autoga läbi poe seina
-- Hallitusjuustu varas tabati Tartus
-- Kassihull naine ründas naabrit noaga
-- Pangaröövel põgenes politsei eest ühistranspordiga
-- Kelmikad noored varastasid Vabaduse väljaku jõulukuuse
-- Naine nõudis sotsiaalmaksu tagasi ja põgenes politsei eest
-- Kassist sai politsei teraapiakoer
-- Mees hüppas politsei eest peitu toidujäätmete konteinerisse
-- Mürkidega kaubitsemine peatati Tartus
-- Salapärane laevaga seotud kuritegu Paldiskis
-- Lennuk maandus Pirita rannas
-- Mees jäi hammastega rooli külge kinni
-- Röövlid õhkasid Õismäel pangaautomaadi
-- Tabati leidlikud salapiirituse valmistajad
-- Politseireid Sõle tänava bordelli kulges vägivaldselt
-- Narkomaanid varastasid raamatukogu tühjaks
-- Politsei arreteeris Kopli narkodiilerid suurte jõududega
-- Vanas sõjaväetelgis avastati ebahügieeniline vorstivabrik"""
-    response = _prompt_openai_model(prompt.strip(), max_tokens=360)
-    # Convert the numbered list to a Python list
-    title_candidates = re.findall(r"^\d+\. (.+)$", response, re.MULTILINE)
-    # Convert back to a string for the next prompt
-    title_candidates_str = "\n".join(
-        f"{i + 1}. {title}" for i, title in enumerate(title_candidates)
-    )
-    logger.info(f"Title candidates:\n{title_candidates_str}")
+        prompt += f" Avoid mentioning the following topics: {', '.join(avoid_topics)}."
+    response = _prompt_openai_model(prompt, max_tokens=360)
+    # Convert the numbered list to a Python list. Also remove trailing whitespace and
+    # initial and final quotation marks.
+    return re.findall(r"^\d+\. \"?(.+?)\"?\s*$", response, re.MULTILINE)
+
+
+def select_title(titles):
+    """Select the best title index from the list of candidates."""
+    if len(titles) == 1:
+        return titles[0]
+    # Convert list of titles to a string for the prompt
+    titles_str = "\n".join(f"{i + 1}. {title}" for i, title in enumerate(titles))
     prompt = f"""
 Which one of these sentences in Estonian stands out as the one you would least expect to see as a news headline? Pick the most unexpected and weird one. Only reply with the number.
-{title_candidates_str}"""
+{titles_str}"""
     for _ in range(10):
         # Only need the number, so allow truncated responses of length 1
         title_idx = _prompt_openai_model(
             prompt.strip(), max_tokens=1, allow_truncated=True
         )
         try:
-            selected_title = title_candidates[int(title_idx) - 1]
-        except ValueError:
+            title_idx = int(title_idx) - 1
+            titles[title_idx]
+        except (ValueError, IndexError):
             logger.error(f"Invalid title number: {title_idx}")
             continue
-        # Remove the number from the title
-        return selected_title
+        return title_idx
     raise Exception("Failed to select a title")
 
 
-def gen_summary(title, avoid_topics=None, no_openai=False):
+def gen_summary(title, include_topics=None, avoid_topics=None, no_openai=False):
     """Generate a summary for the episode."""
     if no_openai:
         return _ask_user_for_input(
@@ -390,11 +453,27 @@ def gen_summary(title, avoid_topics=None, no_openai=False):
             "the animal to authorities, but the woman was allowed to keep it after "
             "proving she could care for it properly.",
         )
-    prompt = f"""
-Imagine there is a crime news article in Estonian titled "{title}". Can you make up a short 3-sentence summary of the events that took place, including a bizarre reason/explanation/motive?"""
+    filter_prompt = ""
+    if include_topics:
+        filter_prompt += f" Include the following topics: {', '.join(include_topics)}."
     if avoid_topics:
-        prompt += f"Avoid mentioning the following topics: {', '.join(avoid_topics)}."
-    return _prompt_openai_model(prompt.strip())
+        filter_prompt += (
+            f" Avoid mentioning the following topics: {', '.join(avoid_topics)}."
+        )
+    prompt = f"""
+Imagine there is a crime news article in Estonian titled "{title}". Make up a short summary (in the Estonian language) of the story, using the template below.{filter_prompt}
+
+```
+KOHT: [specific city/town/village where the event occurred, optionally the street name]
+AEG: [specific time and day when the event occurred]
+SÜNDMUSED: [3-sentence summary of the events that occurred, what led up to them and what happened after]
+KAHTLUSALUNE: [description and optionally the first name and age of the prime suspect(s)]
+MOTIIV: [bizarre reason/explanation/motive as to why the event occurred or the crime was committed]
+POLITSEI: [1 brief sentence description of the actions that the police have taken]
+```"""
+    return _prompt_openai_model(
+        prompt.strip(), max_tokens=500, allow_truncated=True
+    ).strip()
 
 
 def gen_script(summary, no_openai=False):
@@ -811,25 +890,34 @@ def prepend_intro_and_final_render(input_file, title):
     return output_file
 
 
-def make_episode(ep_dir, interactive=False, avoid_topics=None, no_openai=False):
+def make_episode(
+    ep_dir, interactive=False, include_topics=None, avoid_topics=None, no_openai=False
+):
     """Make a single episode with a given index."""
     process_start_time = time.time()
     print()
     logger.info(f"Making episode {ep_dir.name}...")
     logger.info("Generating episode title...")
-    title = _interactive_wrapper(
-        interactive, "title", gen_title, (avoid_topics, no_openai)
+    title = _interactive_select_wrapper(
+        interactive,
+        "title",
+        gen_titles,
+        (include_topics, avoid_topics, no_openai),
+        select_title,
     )
     logger.info(f"Episode title: {title}")
 
     logger.info("Generating episode summary...")
-    summary = _interactive_wrapper(
-        interactive, "summary", gen_summary, (title, avoid_topics, no_openai)
+    summary = _interactive_override_wrapper(
+        interactive,
+        "summary",
+        gen_summary,
+        (title, include_topics, avoid_topics, no_openai),
     )
     logger.info(f"Episode summary:\n{summary}")
 
     logger.info("Generating episode script...")
-    script = _interactive_wrapper(
+    script = _interactive_override_wrapper(
         interactive, "script", gen_script, (summary, no_openai)
     )
     logger.info(f"Episode script:\n{script}")
@@ -847,9 +935,7 @@ def make_episode(ep_dir, interactive=False, avoid_topics=None, no_openai=False):
     logger.info(f"Total audio length: {total_audio_length:.2f}s")
 
     logger.info("Generating video prompts...")
-    prompts = _interactive_wrapper(
-        interactive, "video prompts", gen_video_prompts, (summary, no_openai)
-    )
+    prompts = gen_video_prompts(summary, no_openai)
     prompts, prompt_lenghts = distribute_prompts(prompts, audio_lengths)
     for prompt, length in zip(prompts, prompt_lenghts):
         short_prompt = prompt[:50] + "..." if len(prompt) > 50 else prompt
@@ -912,7 +998,7 @@ def make_episodes(args):
         episode_dir.mkdir(parents=True)
         episode_logger = logger.add(episode_dir / "log.txt")
         episode_files = make_episode(
-            episode_dir, args.interactive, args.avoid, args.no_openai
+            episode_dir, args.interactive, args.include, args.avoid, args.no_openai
         )
 
         logger.info("Uploading episode to Google Drive...")
