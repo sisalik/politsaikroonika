@@ -32,14 +32,11 @@ SILENCE_PADDING = 0.3
 # Video generation prompt for the first and last shots with the reporter
 REPORTER_PROMPT = (
     "norwegian adult male reporter talking into microphone, (tony hawk hair:0.9), "
-    "90s black leather jacket, portrait shot, looking at camera, standing on 80s "
+    "90s bomber jacket, portrait shot, looking at camera, standing on 80s "
     "russian city street"
 )
 # Shared negative video generation prompt
-NEGATIVE_PROMPT = (
-    "camera pan, moving camera, dynamic shot, text, watermark, copyright, blurry, "
-    "blood, gore, wounds"
-)
+NEGATIVE_PROMPT = "watermark, copyright, blurry, blood, gore, wounds"
 # Append style parameters to each video generation prompt
 VIDEO_STYLE_EXTRA = ", russia, eastern europe"
 # Minimum number of words in the generated script
@@ -748,27 +745,30 @@ def gen_video_prompts(summary, no_openai=False):
     prompt = f"""
 Generate captions for a photographic storyboard for a police and crime news TV segment. Its short summary is as follows:
 
-"{summary}"
+```
+{summary}
+```
 
-There should be 5 captions in total. The captions should:
-- be written in terse, simple, basic, easy-to-understand news style English, with lots of descriptive keywords and adjectives
-- describe photographic stills of the news segment
-- avoid mentioning concepts that are too abstract or general to be visualized
-- start each caption with a simple words; add simple synonyms for complicated/rare/archaic words
+There should be 5 captions in total. For human/animal subjects, the captions should follow the structure "(a/an) [description] [subject] (wearing a [clothing]) [doing something] in/on [setting] during [time of day]". For inanimate subjects, use the template "([camera angle] of) [description] [subject] in [setting] during [time of day]".
+
+The captions should:
+- be written in terse, simple, basic, easy-to-understand news style English
+- avoid mentioning concepts that are too abstract or general to be visualized, e.g. emotions, intentions, motives, analysis, discussion, organisations
+- be formatted as a bulleted list
 - focus on the main characters and criminal events, not the police officers
-- be one per line, focussed on a single subject and avoiding too many different concepts
+- each focus on a single subject and avoiding too many different concepts
 - avoid these keywords: aerial view, close-up, crowd, blood, gore, wounds
 - avoid mentioning specific geographic locations
 - include detailed information about the subject (color, shape, texture, size), background and image style
-- be formatted as a comma-separated list of key words and phrases
 - be in chronological order to form a coherent story
+- be no more than 16 words long
 
 Examples:
-- man wearing a hoodie, criminal, holding a gun, threatening, pointing at the camera
-- car chase, city street, police cars, sirens, flashing lights
-- green rusty door, small hidden opening, people entering, flashlight
-- interior of abandoned building, large vats and pipes, various bottles and containers, cobwebs, dark, ambient lighting
-- factory exterior, group of onlookers, police cars"""
+- a tall blond man wearing a hoodie holding a gun in bar during night
+- wide angle shot of green rusty door in forest hillside during dusk
+- large vats and pipes in abandoned building during night
+- angry protestors wearing factory uniforms in factory yard during daytime
+- a brown cat lying down on kitchen table during morning"""
     response = _prompt_openai_model(prompt.strip())
     video_prompts = (line.strip() for line in response.splitlines() if line.strip())
     # Remove bullet points and numbering in case there is any
