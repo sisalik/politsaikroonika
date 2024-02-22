@@ -106,6 +106,7 @@ def _parse_args():
     parser.add_argument(
         "-i", "--interactive", action="store_true", help="Interactive mode"
     )
+    parser.add_argument("-t", "--title", type=str, help="Episode title")
     parser.add_argument("-a", "--avoid", type=str, action="append", help="Avoid topics")
     parser.add_argument(
         "-l", "--include", type=str, action="append", help="Include topics"
@@ -211,7 +212,7 @@ def _prompt_openai_model_with_context(
     raise Exception("OpenAI API failed to return a valid response")
 
 
-def _ask_user_for_input(item_name, default=None, item_type=str):
+def _ask_user_for_input(item_name, default=None, item_type=str, multiline=False):
     """Prompt the user for input."""
     prompt = f"Enter {item_name}"
     if item_type in (list, tuple):
@@ -220,7 +221,10 @@ def _ask_user_for_input(item_name, default=None, item_type=str):
         prompt += f" (default: {default})"
     prompt += ": "
     while True:
-        user_input = input(prompt)
+        if multiline:
+            user_input = utils.input_multiline(prompt)
+        else:
+            user_input = input(prompt)
         if user_input == "" and default is not None:
             return default
         elif user_input != "":
@@ -231,7 +235,9 @@ def _ask_user_for_input(item_name, default=None, item_type=str):
             return user_input
 
 
-def _interactive_override_wrapper(interactive, output_name, func, args):
+def _interactive_override_wrapper(
+    interactive, output_name, func, args, multiline=False
+):
     """Run a function, optionally prompting the user for input."""
     if not interactive:
         return func(*args)
@@ -253,7 +259,10 @@ def _interactive_override_wrapper(interactive, output_name, func, args):
         # Loop until the user provides valid input
         while True:
             print(f"Generated {output_name}:\n{output}\n")
-            response = input(input_prompt).strip()
+            if multiline:
+                response = utils.input_multiline(input_prompt, tuple("ynqYNQ")).strip()
+            else:
+                response = input(input_prompt).strip()
             print()
             if response.lower() == "y":
                 logger.debug(f"User selected to accept the {output_name}")
@@ -280,7 +289,7 @@ def _interactive_override_wrapper(interactive, output_name, func, args):
 
 
 def _interactive_select_wrapper(
-    interactive, output_name, gen_func, gen_args, select_func
+    interactive, output_name, gen_func, gen_args, select_func, multiline=False
 ):
     """Run a function to pick an item from a list, allowing the user to override."""
     if not interactive:
@@ -307,7 +316,13 @@ def _interactive_select_wrapper(
         )
         # Loop until the user provides valid input
         while True:
-            response = input(input_prompt).strip()
+            if multiline:
+                terminators = tuple("ynqYNQ") + tuple(
+                    str(n) for n in range(1, len(items) + 1)
+                )
+                response = utils.input_multiline(input_prompt, terminators).strip()
+            else:
+                response = input(input_prompt).strip()
             print()
             if response.lower() == "y":
                 logger.debug(f"User selected to accept the {output_name}")
@@ -411,8 +426,14 @@ def gen_titles(include_topics=None, avoid_topics=None, no_openai=False):
         prompt += f" Avoid mentioning the following topics: {', '.join(avoid_topics)}."
     response = _prompt_openai_model(prompt, max_tokens=360)
     # Convert the numbered list to a Python list. Also remove trailing whitespace and
-    # initial and final quotation marks.
-    return re.findall(r"^\d+\. \"?(.+?)\"?\s*$", response, re.MULTILINE)
+    # full stops and exclamation marks
+    title_candidates = re.findall(r"\d+\. (.+?)[\.!]?\s*$", response, re.MULTILINE)
+    # If a title begins and ends with quotation marks, remove them
+    title_candidates = [
+        title[1:-1] if title.startswith('"') and title.endswith('"') else title
+        for title in title_candidates
+    ]
+    return title_candidates
 
 
 def select_title(titles):
@@ -425,14 +446,18 @@ def select_title(titles):
 Which one of these sentences in Estonian stands out as the one you would least expect to see as a news headline? Pick the most unexpected and weird one. Only reply with the number.
 {titles_str}"""
     for _ in range(10):
-        # Only need the number, so allow truncated responses of length 1
+        # Only need the number, so allow very short truncated responses. One token is
+        # enough to represent small numbers but sometimes the response is in the format
+        # "Number x" so allow 3 tokens to be safe.
         title_idx = _prompt_openai_model(
-            prompt.strip(), max_tokens=1, allow_truncated=True
+            prompt.strip(), max_tokens=3, allow_truncated=True
         )
         try:
+            # Find the number in the response
+            title_idx = re.search(r"\d+", title_idx).group()
             title_idx = int(title_idx) - 1
             titles[title_idx]
-        except (ValueError, IndexError):
+        except (AttributeError, ValueError, IndexError):
             logger.error(f"Invalid title number: {title_idx}")
             continue
         return title_idx
@@ -925,20 +950,26 @@ def prepend_intro_and_final_render(input_file, title):
 
 
 def make_episode(
-    ep_dir, interactive=False, include_topics=None, avoid_topics=None, no_openai=False
+    ep_dir,
+    title=None,
+    interactive=False,
+    include_topics=None,
+    avoid_topics=None,
+    no_openai=False,
 ):
     """Make a single episode with a given index."""
     process_start_time = time.time()
     print()
     logger.info(f"Making episode {ep_dir.name}...")
-    logger.info("Generating episode title...")
-    title = _interactive_select_wrapper(
-        interactive,
-        "title",
-        gen_titles,
-        (include_topics, avoid_topics, no_openai),
-        select_title,
-    )
+    if title is None:
+        logger.info("Generating episode title...")
+        title = _interactive_select_wrapper(
+            interactive,
+            "title",
+            gen_titles,
+            (include_topics, avoid_topics, no_openai),
+            select_title,
+        )
     logger.info(f"Episode title: {title}")
 
     logger.info("Generating episode summary...")
@@ -947,16 +978,22 @@ def make_episode(
         "summary",
         gen_summary,
         (title, include_topics, avoid_topics, no_openai),
+        multiline=True,
     )
     logger.info(f"Episode summary:\n{summary}")
 
     logger.info("Generating episode script...")
     script = _interactive_override_wrapper(
-        interactive, "script", gen_script, (summary, no_openai)
+        interactive, "script", gen_script, (summary, no_openai), multiline=True
     )
     logger.info(f"Episode script:\n{script}")
     raw_sentences = list(split_sentences(script))
     converted_sentences = list(convert_sentences(raw_sentences))
+
+    logger.info("Generating video prompts...")
+    prompts = _interactive_override_wrapper(
+        interactive, "video prompts", gen_video_prompts, (summary, no_openai)
+    )
 
     logger.info(f"Generating audio for {len(raw_sentences)} sentences...")
     audio_files = gen_audio(converted_sentences, ep_dir)
@@ -972,8 +1009,6 @@ def make_episode(
     if total_audio_length > AUDIO_LENGTH_MAX:
         logger.warning(f"Total audio length exceeds maximum of {AUDIO_LENGTH_MAX:.2f}s")
 
-    logger.info("Generating video prompts...")
-    prompts = gen_video_prompts(summary, no_openai)
     prompts, prompt_lenghts = distribute_prompts(prompts, audio_lengths)
     for prompt, length in zip(prompts, prompt_lenghts):
         short_prompt = prompt[:50] + "..." if len(prompt) > 50 else prompt
@@ -1037,7 +1072,12 @@ def make_episodes(args):
         episode_dir.mkdir(parents=True)
         episode_logger = logger.add(episode_dir / "log.txt")
         episode_files = make_episode(
-            episode_dir, args.interactive, args.include, args.avoid, args.no_openai
+            episode_dir,
+            args.title,
+            args.interactive,
+            args.include,
+            args.avoid,
+            args.no_openai,
         )
 
         logger.info("Uploading episode to Google Drive...")

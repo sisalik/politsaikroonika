@@ -11,6 +11,18 @@ PYTHON_VENVS = {
 }
 
 
+def input_multiline(prompt="", terminators=()):
+    """Get multiline input from the user."""
+    print(prompt, end="")  # Same behavior as input()
+    lines = []
+    while True:
+        line = input()
+        lines.append(line)
+        if line in terminators + ("",):  # Empty line or any of the terminators
+            break
+    return "\n".join(lines)
+
+
 def get_git_revision():
     """Get the current git revision."""
     output = subprocess.run(
