@@ -53,15 +53,15 @@ VIDEO_FRAMES_MAX = 28
 # The reporter prompt seems to allow longer video to be generated without too many
 # artifacts, so use a separate maximum for it
 VIDEO_FRAMES_MAX_REPORTER = 48
-# OpenAI model to use for text generation
-OPENAI_MODEL = "gpt-3.5-turbo"
+# Default OpenAI model to use for text generation
+OPENAI_DEFAULT_MODEL = "gpt-3.5-turbo"
 # Default OpenAI temperature parameter (0-1). Higher values result in more randomness.
 OPENAI_DEFAULT_TEMPERATURE = 0.7
 # Social media caption template
 SOCIAL_MEDIA_CAPTION_TEMPLATE = """
 Osa x: {title}
 
-100% AI-genereeritud krimiuudised 🤖👮 uus osa iga päev!
+100% AI-genereeritud krimiuudised 🤖👮 uus osa aeg-ajalt
 Tehnoloogiad: GPT-3.5, ModelScope text2video, Tacotron 2 TTS, EstNLTK, ffmpeg, Python
 
 #tehisintellekt #kuritegevus #uudised #politseikroonika #krimi #90ndad #satiir #naljakas #eesti #meem #ai #aiart #crime #news #deepfake #artificialintelligence #satire #funny #chatgpt #stablediffusion"""
@@ -167,6 +167,7 @@ def _prompt_openai_model(
     temperature=OPENAI_DEFAULT_TEMPERATURE,
     allow_truncated=False,
     max_attempts=10,
+    model=OPENAI_DEFAULT_MODEL,
 ):
     return _prompt_openai_model_with_context(
         messages=[UserMessage(prompt)],
@@ -174,6 +175,7 @@ def _prompt_openai_model(
         temperature=temperature,
         allow_truncated=allow_truncated,
         max_attempts=max_attempts,
+        model=model,
     )
 
 
@@ -183,6 +185,7 @@ def _prompt_openai_model_with_context(
     temperature: float = OPENAI_DEFAULT_TEMPERATURE,
     allow_truncated: bool = False,
     max_attempts: int = 10,
+    model: str = OPENAI_DEFAULT_MODEL,
 ):
     """Initialize OpenAI API and make a request."""
     openai.api_key = os.environ["OPENAI_API_KEY"]
@@ -419,7 +422,7 @@ def gen_titles(include_topics=None, avoid_topics=None, no_openai=False):
             ],
             item_type=list,
         )
-    prompt = f"Act as a TV news editor in Estonia. Your task is to generate a list of 10 headlines for a crime news TV segment. The headlines should be simple declarative sentences written in the Estonian language only - do not include English translations. Use only commas (if necessary) and no other punctuation. Each headline should be no more than 10 words and describe a specific, bizarre yet plausible criminal event that would be of interest to adults with a sense of humor. Examples of types of crimes: antisocial behaviour, protesting, terrorism, forgery,  hacking, fraud, scamming, smuggling, robbery, theft, traffic accident, identity theft, violence etc. The tone should be serious, and you should include who was involved and where it happened. Please avoid covering mundane or too gruesome incidents. To optimize for engagement, ensure the headlines are catchy, click-worthy, and attention-grabbing. Remember to tailor your headlines to the target audience mentioned."
+    prompt = f"Act as a TV news editor in Estonia. Your task is to generate a list of 10 strange headlines for a fake crime news TV segment. The headlines should be simple declarative sentences written in the Estonian language only - do not include English translations. Each headline should be no more than 10 words and describe a specific, very weird, unexpected, far-fetched, bizarre yet somewhat plausible criminal event that would be of interest to adults with a sense of humor. Please avoid covering mundane, regular, boring or too gruesome incidents.  Examples of types of crimes: antisocial behaviour, protesting, terrorism, forgery,  hacking, fraud, scamming, smuggling, robbery, theft, traffic accident, identity theft, violence etc. Use only commas (if necessary) and no other punctuation. The tone should be serious, and you should include who was involved and where it happened. To optimize for engagement, ensure the headlines are catchy, click-worthy, and attention-grabbing. Remember to tailor your headlines to the target audience mentioned."
     if include_topics:
         prompt += f" Include the following topics in each headline: {', '.join(include_topics)}."
     if avoid_topics:
@@ -483,15 +486,15 @@ def gen_summary(title, include_topics=None, avoid_topics=None, no_openai=False):
             f" Avoid mentioning the following topics: {', '.join(avoid_topics)}."
         )
     prompt = f"""
-Imagine there is a crime news article in Estonian titled "{title}". Make up a short summary (in the Estonian language) of the story, using the template below.{filter_prompt}
+Imagine there is a crime news article in Estonian titled "{title}". Write a short summary (in the Estonian language) of the story, using the template below. If any details are unknown, be creative and make them up.{filter_prompt}
 
 ```
-KOHT: [specific city/town/village where the event occurred, optionally the street name]
+KOHT: [specific random/made-up city/town/village where the event occurred, and a made-up street name (excluding the house number for privacy)]
 AEG: [specific time and day when the event occurred]
-SÜNDMUSED: [3-sentence summary of the events that occurred, what led up to them and what happened after]
-KAHTLUSALUNE: [description and optionally the first name and age of the prime suspect(s)]
-MOTIIV: [bizarre reason/explanation/motive as to why the event occurred or the crime was committed]
-POLITSEI: [1 brief sentence description of the actions that the police have taken]
+SÜNDMUSED: [3-sentence summary of the unexpected and strange events that occurred, what led up to them and what happened after]
+KAHTLUSALUNE: [description and made-up first name (and optionally the age) of the prime suspect(s)]
+MOTIIV: [bizarre reason/explanation/motive as to why the event occurred or the crime was committed - if unknown, make up a reason]
+POLITSEI: [1 brief sentence description of the actions that the police have taken which may or may not have been successful]
 ```"""
     return _prompt_openai_model(
         prompt.strip(), max_tokens=500, allow_truncated=True
@@ -522,14 +525,16 @@ Generate the script for an Estonian police and crime news TV segment. The segmen
 Expand the story of the summary above and follow these constraints below in no particular order:
 - The word count should be up to {SCRIPT_WORDS_MAX} words
 - Start by addressing the viewers of a made-up TV channel and stating the location and time of the event
-- Focus on describing the tragic events and casualties at length in a detailed manner, inventing extra details and adding nuance
+- Focus on describing the events and consequences at length in a detailed manner, inventing extra details and adding nuance
 - Discuss why the crime occurred, or the motives of the criminal
 - Use poetic and edgy, yet graphic language with old-fashioned metaphors and proverbs
 - Speak somewhat demeaningly of the victims
 - Briefly describe the actions of the police officers which may or may not have been successful
 - End with one sentence with a thought-provoking statement that is not obvious or cliché, e.g. crime is bad
 - Do not address the viewers again or sign off at the end of the segment"""
-    script = _prompt_openai_model(prompt.strip(), max_tokens=800, allow_truncated=True)
+    script = _prompt_openai_model(
+        prompt.strip(), max_tokens=800, allow_truncated=True, model="gpt-4"
+    )
     word_count = _word_count(script)
     # If the script is too long or short, try to rewrite it by asking the AI to do it,
     # with the context of the prompt and the script itself
@@ -550,6 +555,7 @@ Expand the story of the summary above and follow these constraints below in no p
             messages,
             max_tokens=800,
             allow_truncated=True,
+            model="gpt-4",
         )
     else:
         raise Exception("Failed to rewrite the script")
@@ -561,6 +567,8 @@ Expand the story of the summary above and follow these constraints below in no p
 
 def split_sentences(script):
     """Split script into sentences using EstNLTK."""
+    # Substitute any fancy quotes with normal quotes
+    script = script.replace("„", '"').replace("“", '"')
     # Swap any quotes and periods that throw off the sentence splitter
     script = script.replace('."', '".')
     script_text = Text(script)
@@ -578,6 +586,8 @@ def convert_sentences(raw_sentences):
         ("kuriteo", "kurideo"),
         # Foreign words
         ("ch", "tš"),
+        ("mcdonald's", "mäkdoonalds"),
+        ("iphone", "aifoun"),
     ]
     for raw in raw_sentences:
         converted = convert_sentence(raw)
@@ -704,25 +714,25 @@ def gen_video_prompts(summary, no_openai=False):
             item_type=list,
         )
     prompt = f"""
-Generate captions for a photographic storyboard for a police and crime news TV segment. Its short summary is as follows:
+Generate prompts for a set of AI-generated illustrations for a police and crime news article, summarised below:
 
 ```
 {summary}
 ```
 
-There should be 5 captions in total. For human/animal subjects, the captions should follow the structure "(a/an) [description] [subject] (wearing a [clothing]) [doing something] in/on [setting] during [time of day]". For inanimate subjects, use the template "([camera angle] of) [description] [subject] in [setting] during [time of day]".
-
-The captions should:
+There should be 5 prompts in total. They should:
 - be written in terse, simple, basic, easy-to-understand news style English
 - avoid mentioning concepts that are too abstract or general to be visualized, e.g. emotions, intentions, motives, analysis, discussion, organisations
 - be formatted as a bulleted list
 - focus on the main characters and criminal events, not the police officers
 - each focus on a single subject and avoiding too many different concepts
 - avoid these keywords: aerial view, close-up, crowd, blood, gore, wounds
-- avoid mentioning specific geographic locations
+- avoid mentioning the names of people, places or organisations
 - include detailed information about the subject (color, shape, texture, size), background and image style
 - be in chronological order to form a coherent story
 - be no more than 16 words long
+
+For human/animal subjects, the prompts should follow the structure "(a/an) [description] [subject] (wearing a [clothing]) [doing something] in/on [setting] during [time of day]". For inanimate subjects, use the template "([camera angle] of) [description] [subject] in [setting] during [time of day]".
 
 Examples:
 - a tall blond man wearing a hoodie holding a gun in bar during night
