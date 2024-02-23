@@ -189,13 +189,22 @@ def _prompt_openai_model_with_context(
 ):
     """Initialize OpenAI API and make a request."""
     openai.api_key = os.environ["OPENAI_API_KEY"]
-    for attempt in range(max_attempts):
-        response = openai.ChatCompletion.create(
-            model=OPENAI_MODEL,
-            messages=[m.as_dict() for m in messages],
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+    for attempt in range(max_attempts - 1):
+        try:
+            response = openai.ChatCompletion.create(
+                model=model,
+                messages=[m.as_dict() for m in messages],
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        # Rate limit errors, in this application, are caused by the servers being
+        # overloaded with other requests. In this case, we can retry the request.
+        except openai.error.RateLimitError:
+            logger.warning("OpenAI API rate limit error")
+            if attempt < max_attempts - 1:
+                logger.info(f"Retrying ({attempt + 2}/{max_attempts})...")
+                time.sleep(5)
+            continue
         response_text = response["choices"][0]["message"]["content"]
         stop_reason = response["choices"][0]["finish_reason"]
         logger.debug(
@@ -208,7 +217,8 @@ def _prompt_openai_model_with_context(
             logger.warning(
                 f"OpenAI API returned an unexpected stop reason: {stop_reason}"
             )
-            logger.info(f"Retrying ({attempt + 1}/{max_attempts})...")
+            if attempt < max_attempts - 1:
+                logger.info(f"Retrying ({attempt + 2}/{max_attempts})...")
             continue
 
         return response_text
