@@ -3,4 +3,4 @@
 	url = https://github.com/sisalik/tts_preprocess_et
 [submodule "Voice-Cloning-App"]
 	path = Voice-Cloning-App
-	url = https://github.com/BenAAndrew/Voice-Cloning-App.git
+	url = https://github.com/sisalik/Voice-Cloning-App.git
