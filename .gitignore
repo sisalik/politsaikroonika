@@ -7,3 +7,6 @@ resources/service-secrets.json
 
 *.pyc
 __pycache__
+experiments
+media
+vid_*.mp4

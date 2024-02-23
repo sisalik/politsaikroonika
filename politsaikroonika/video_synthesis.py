@@ -73,16 +73,18 @@ class VideoGenPipeline:
                 # The callback is called after each inference step, not after each
                 # frame, so we calculate the equivalent frame number here and set the
                 # progress bar to that value
-                callback = lambda step, timestep, latents: self._set_progress_bar(
-                    self._progress_bar,
-                    round(
-                        (step + 1)
-                        / kwargs["num_inference_steps"]
-                        * kwargs["num_frames"]
-                        + frames_processed,
-                        2,
-                    ),
-                )
+                def callback(step, _timestep, _latents):
+                    return self._set_progress_bar(
+                        self._progress_bar,
+                        round(
+                            (step + 1)
+                            / kwargs["num_inference_steps"]
+                            * kwargs["num_frames"]
+                            + frames_processed,
+                            2,
+                        ),
+                    )
+
                 kwargs.update(callback=callback)
             # Initialise the RNG with the seed, if provided
             if kwargs["seed"] != -1:

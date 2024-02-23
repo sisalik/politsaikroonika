@@ -92,17 +92,6 @@ def pc_sleep():
     subprocess.run("rundll32.exe powrprof.dll,SetSuspendState 0,1,0".split())
 
 
-def _dump_str_prefer_multiline(v):
-    """Dump a string to TOML, preferring the multiline string format."""
-    multilines = v.split("\n")
-    if len(multilines) > 1:
-        return toml.encoder.unicode(
-            '"""\n' + v.replace('"""', '\\"""').strip() + '\n"""'
-        )
-    else:
-        return toml.encoder._dump_str(v)
-
-
 class MultilinePreferringTomlEncoder(toml.encoder.TomlEncoder):
     """A TOML encoder that prefers the multiline string format if possible."""
 
@@ -110,4 +99,15 @@ class MultilinePreferringTomlEncoder(toml.encoder.TomlEncoder):
         super(MultilinePreferringTomlEncoder, self).__init__(
             _dict=dict, preserve=preserve
         )
-        self.dump_funcs[str] = _dump_str_prefer_multiline
+        self.dump_funcs[str] = self._dump_str_prefer_multiline
+
+    @staticmethod
+    def _dump_str_prefer_multiline(v):
+        """Dump a string to TOML, preferring the multiline string format."""
+        multilines = v.split("\n")
+        if len(multilines) > 1:
+            return toml.encoder.unicode(
+                '"""\n' + v.replace('"""', '\\"""').strip() + '\n"""'
+            )
+        else:
+            return toml.encoder._dump_str(v)
