@@ -10,6 +10,28 @@ PYTHON_VENVS = {
     "sd-webui-text2video": Path("sd-webui-text2video/.venv/Scripts/python.exe"),
 }
 
+def ask_user_for_input(item_name, default=None, item_type=str, multiline=False):
+    """Prompt the user for input."""
+    prompt = f"Enter {item_name}"
+    if item_type in (list, tuple):
+        prompt += " (separated by semicolons)"
+    if default is not None:
+        prompt += f" (default: {default})"
+    prompt += ": "
+    while True:
+        if multiline:
+            user_input = input_multiline(prompt)
+        else:
+            user_input = input(prompt)
+        if user_input == "" and default is not None:
+            return default
+        elif user_input != "":
+            user_input = user_input.strip()
+            if item_type in (list, tuple):
+                user_input = user_input.split(";")
+                user_input = [item.strip() for item in user_input]
+            return user_input
+
 
 def input_multiline(prompt="", terminators=()):
     """Get multiline input from the user."""
